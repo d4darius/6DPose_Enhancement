@@ -1,0 +1,7 @@
+numpy
+matplotlib
+torch
+open3d
+pillow
+torchvision
+kaleido
