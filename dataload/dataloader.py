@@ -46,7 +46,7 @@ class PoseDataset(Dataset):
         return self.transform(img)
     def load_depth(self, depth_path):
         # Load a depth image and convert to tensor.
-        depth = Image.open(depth_path).convert("L")
+        depth = Image.open(depth_path)
         return self.transform(depth)
     def load_mask(self, mask_path):
         # Load a mask image and convert to tensor.
