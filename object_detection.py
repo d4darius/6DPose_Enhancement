@@ -1,21 +1,12 @@
 import os
 import torch
 import numpy as np
-import matplotlib.pyplot as plt
 from tqdm import tqdm
 import yaml
-import argparse
+import argparse 
+from ultralytics import YOLO
 
 from dataload.dataloader import PoseDataset
-from object_detection import calculate_iou, plot_results
-
-def ensure_dependencies():
-    """Ensure all dependencies are installed"""
-    try:
-        import ultralytics
-    except ImportError:
-        print("Installing ultralytics...")
-        os.system("pip install ultralytics")
 
 def get_device():
     """Get the best available device (CUDA, MPS, or CPU)"""
@@ -200,12 +191,6 @@ def main():
                         help='Path to fine-tuned model')
     parser.add_argument('--samples', type=int, default=5, help='Number of samples to visualize')
     args = parser.parse_args()
-    
-    # Ensure dependencies
-    ensure_dependencies()
-    
-    # Import YOLO after ensuring it's installed
-    from ultralytics import YOLO
     
     # Set device
     device = get_device()
