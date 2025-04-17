@@ -60,7 +60,7 @@ class PoseDataset(Dataset):
     def load_pose(self, pose_path, idx):
         # Load a 6D pose.
         with open(pose_path, 'r') as f:
-            pose_data = yaml.safe_load(f)
+            pose_data = yaml.load(f, Loader=yaml.CLoader)
             sample_data = pose_data[idx][0]
             # Convert to numpy array
             rot_mat = np.array(sample_data['cam_R_m2c'], dtype=np.float32).reshape(3, 3)
@@ -69,7 +69,7 @@ class PoseDataset(Dataset):
     def load_bbx(self, bbx_path, idx):
         # Load a bounding box.
         with open(bbx_path, 'r') as f:
-            bbx_data = yaml.safe_load(f)
+            bbx_data = yaml.load(f, Loader=yaml.CLoader)
             sample_data = bbx_data[idx][0]
             # Convert to numpy array
             bbx = np.array(sample_data['obj_bb'], dtype=np.float32)
@@ -156,3 +156,26 @@ class PoseDataset(Dataset):
             plt.show()
         else:
             plt.close()
+
+if __name__ == '__main__':
+    # CHECK FOR DATASET POSITION
+    dataset_root = os.path.join(os.path.dirname(__file__), '../../dataset/linemod/DenseFusion/Linemod_preprocessed/')
+    if not os.path.exists(dataset_root):
+        raise FileNotFoundError(f"Dataset not found at {dataset_root}. Please check the path.")
+    print(f"Dataset found at {dataset_root}.")
+
+    # DATASET TEST
+    train_dataset = PoseDataset(
+        dataset_root=dataset_root,
+        split='train',
+        train_ratio=0.8,
+        seed=42
+    )
+    # DATASET PLOT TEST:
+    idx = 0
+    train_dataset.plotitem(idx)
+
+    train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True)
+
+
+    print(f"Training samples: {len(train_dataset)}")
