@@ -3,28 +3,12 @@ import yaml
 import shutil
 import numpy as np
 from tqdm import tqdm
-import torch
-import multiprocessing  # Import multiprocessing
-from functools import partial  # Import partial for worker function arguments
-from collections import defaultdict  # To group samples by folder
-import ultralytics
-from ultralytics import YOLO
-
-# Import from local dataset
-from dataload.dataloader import PoseDataset
-
-def get_device():
-    """Get the best available device (CUDA, MPS, or CPU)"""
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-        print(f"Using CUDA: {torch.cuda.get_device_name(0)}")
-    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        device = torch.device("mps")
-        print("Using MPS (Apple Silicon GPU)")
-    else:
-        device = torch.device("cpu")
-        print("Using CPU")
-    return device
+import multiprocessing
+from functools import partial
+from collections import defaultdict
+from PIL import Image
+import argparse
+from dataloader import PoseDataset
 
 def process_folder(folder_args, dataset_root, output_dir, split):
     """Worker function to process all samples within a single folder (class) for YOLO format conversion."""
@@ -32,6 +16,7 @@ def process_folder(folder_args, dataset_root, output_dir, split):
     images_dir = os.path.join(output_dir, split, 'images')
     labels_dir = os.path.join(output_dir, split, 'labels')
 
+    # --- Optimization: Load GT file once per folder ---
     bbx_path = os.path.join(dataset_root, 'data', f"{folder_id:02d}", f"gt.yml")
     try:
         with open(bbx_path, 'r') as f:
@@ -39,7 +24,9 @@ def process_folder(folder_args, dataset_root, output_dir, split):
     except (FileNotFoundError, yaml.YAMLError) as e:
         print(f"Warning: Could not load or parse gt.yml for folder {folder_id}, skipping folder. Error: {e}")
         return
-      
+    # --- End Optimization ---
+
+    # --- Optimization: Load image dimensions once per folder (using the first sample) ---
     img_width, img_height = None, None
     if not sample_ids_for_folder:
         print(f"Warning: No samples provided for folder {folder_id} in split '{split}'. Skipping folder.")
@@ -48,19 +35,19 @@ def process_folder(folder_args, dataset_root, output_dir, split):
     first_sample_id = sample_ids_for_folder[0]
     first_img_path = os.path.join(dataset_root, 'data', f"{folder_id:02d}", f"rgb/{first_sample_id:04d}.png")
     try:
-        from PIL import Image
         with Image.open(first_img_path) as img_pil:
             img_width, img_height = img_pil.size  # Width, Height
     except Exception as e:
         print(f"Warning: Could not read image dimensions from first image {first_img_path} for folder {folder_id}, skipping folder. Error: {e}")
         return
+    # --- End Optimization ---
 
     # Process each sample within this folder
     for sample_id in sample_ids_for_folder:
         # Source image path
         img_path = os.path.join(dataset_root, 'data', f"{folder_id:02d}", f"rgb/{sample_id:04d}.png")
 
-        # Basic check if source image exists (optional, as first image check might suffice)
+        # Basic check if source image exists
         if not os.path.exists(img_path):
             print(f"Warning: Source image not found, skipping sample {sample_id} in folder {folder_id}: {img_path}")
             continue
@@ -104,6 +91,7 @@ def process_folder(folder_args, dataset_root, output_dir, split):
         except Exception as e:
              print(f"Warning: Could not write label file {label_path}. Error: {e}")
 
+
 def create_yolo_dataset_parallel(dataset, output_dir, split='train', num_workers=None):
     """Convert dataset to YOLO format in parallel, processing folder by folder."""
     images_dir = os.path.join(output_dir, split, 'images')
@@ -130,16 +118,26 @@ def create_yolo_dataset_parallel(dataset, output_dir, split='train', num_workers
     if num_workers is None:
         num_workers = min(os.cpu_count(), len(folder_args_list)) # Use available cores, but not more than #folders
         print(f"Using {num_workers} workers for dataset conversion.")
+    elif num_workers == 0: # Allow user to specify 0 for sequential processing
+        num_workers = 1
+        print("Using 1 worker (sequential processing) for dataset conversion.")
+
 
     # Create a partial function with fixed arguments for the worker
     worker_func = partial(process_folder, dataset_root=dataset.dataset_root, output_dir=output_dir, split=split)
 
-    # Use multiprocessing Pool to process folders in parallel
-    with multiprocessing.Pool(processes=num_workers) as pool:
-        list(tqdm(pool.imap_unordered(worker_func, folder_args_list), total=len(folder_args_list), desc=f"Converting {split} folders"))
+    # Use multiprocessing Pool to process folders in parallel (or run sequentially if num_workers=1)
+    if num_workers > 1:
+        with multiprocessing.Pool(processes=num_workers) as pool:
+            list(tqdm(pool.imap_unordered(worker_func, folder_args_list), total=len(folder_args_list), desc=f"Converting {split} folders"))
+    else:
+        for args in tqdm(folder_args_list, desc=f"Converting {split} folders sequentially"):
+            worker_func(args)
+
 
     print(f"Finished creating YOLO dataset for '{split}' split.")
     return images_dir, labels_dir
+
 
 def create_yolo_config(dataset_dir, num_classes=15):
     """Create YOLO configuration file"""
@@ -158,150 +156,65 @@ def create_yolo_config(dataset_dir, num_classes=15):
     with open(config_path, 'w') as f:
         yaml.dump(config, f, default_flow_style=False)
 
+    print(f"Created YOLO config at {config_path}")
     return config_path
 
+
 def main():
-    ultralytics.checks()
+    parser = argparse.ArgumentParser(description='Convert Linemod dataset to YOLO format.')
+    parser.add_argument('--dataset_root', type=str, default='../../dataset/linemod/DenseFusion/Linemod_preprocessed/',
+                        help='Path to the root of the preprocessed Linemod dataset.')
+    parser.add_argument('--output_dir', type=str, default='../../dataset/yolo_linemod',
+                        help='Directory to save the YOLO formatted dataset.')
+    parser.add_argument('--train_ratio', type=float, default=0.8, help='Ratio of data to use for training.')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed for train/val split.')
+    parser.add_argument('--num_workers', type=int, default=None, help='Number of workers for parallel processing (default: all cores, 0 for sequential).')
 
-    # Set device
-    device = get_device()
+    args = parser.parse_args()
 
-    # Set up paths
-    # Try relative path first, then absolute if needed
-    relative_dataset_root = '../dataset/linemod/DenseFusion/Linemod_preprocessed/'
-    absolute_dataset_root = '/Users/simone/Documents/GitHub/kokkuapples/dataset/linemod/DenseFusion/Linemod_preprocessed/' # Adjust if needed
+    # Adjust relative paths to be relative to the script's location (dataload folder)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    dataset_root_abs = os.path.abspath(os.path.join(script_dir, args.dataset_root))
+    output_dir_abs = os.path.abspath(os.path.join(script_dir, args.output_dir))
 
-    if os.path.exists(os.path.join(os.path.dirname(__file__), relative_dataset_root)):
-         dataset_root = os.path.join(os.path.dirname(__file__), relative_dataset_root)
-    elif os.path.exists(absolute_dataset_root):
-         dataset_root = absolute_dataset_root
-    else:
-         raise FileNotFoundError(f"Dataset not found at relative path {relative_dataset_root} or absolute path {absolute_dataset_root}. Please check the path.")
-    print(f"Using dataset root: {dataset_root}")
+    if not os.path.exists(dataset_root_abs):
+         raise FileNotFoundError(f"Original dataset not found at {dataset_root_abs}. Please check the path.")
+    print(f"Using original dataset root: {dataset_root_abs}")
 
-    yolo_dataset_dir = os.path.join(os.path.dirname(__file__), 'dataset/yolo_linemod')
-    os.makedirs(yolo_dataset_dir, exist_ok=True)
+    os.makedirs(output_dir_abs, exist_ok=True)
+    print(f"Outputting YOLO dataset to: {output_dir_abs}")
 
-    # --- Dataset Creation (Optimized) ---
+    # --- Dataset Creation ---
     # Create training dataset object (needed for sample list)
     train_dataset_obj = PoseDataset(
-        dataset_root=dataset_root,
+        dataset_root=dataset_root_abs,
         split='train',
-        train_ratio=0.8, # Using 80% for training
-        seed=42
+        train_ratio=args.train_ratio,
+        seed=args.seed
     )
     print(f"Loaded training dataset definition with {len(train_dataset_obj.samples)} samples.")
     # Create YOLO format dataset in parallel (folder-wise, or skip if exists)
-    train_imgs_dir, _ = create_yolo_dataset_parallel(train_dataset_obj, yolo_dataset_dir, 'train')
+    create_yolo_dataset_parallel(train_dataset_obj, output_dir_abs, 'train', args.num_workers)
 
     # Create validation dataset object
     val_dataset_obj = PoseDataset(
-        dataset_root=dataset_root,
+        dataset_root=dataset_root_abs,
         split='val',
-        train_ratio=0.8, # Using the remaining 20% for validation
-        seed=42
+        train_ratio=args.train_ratio,
+        seed=args.seed
     )
     print(f"Loaded validation dataset definition with {len(val_dataset_obj.samples)} samples.")
     # Create YOLO format dataset in parallel (folder-wise, or skip if exists)
-    val_imgs_dir, _ = create_yolo_dataset_parallel(val_dataset_obj, yolo_dataset_dir, 'val')
+    create_yolo_dataset_parallel(val_dataset_obj, output_dir_abs, 'val', args.num_workers)
     # --- End Dataset Creation ---
 
     # Create YOLO config file
-    config_path = create_yolo_config(yolo_dataset_dir)
-    print(f"Created YOLO config at {config_path}")
+    create_yolo_config(output_dir_abs)
 
-    # Load the YOLOv11 model
-    model_name = 'yolo11n.pt' # Largest official model
-    print(f"Loading pretrained model: {model_name}")
-    model = YOLO(model_name)
+    print("\nYOLO dataset export complete.")
 
-    # Clear CUDA cache before training
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        print("CUDA cache cleared")
-        # Check available GPU memory
-        free_mem, total_mem = torch.cuda.mem_get_info()
-        print(f"GPU memory: {free_mem/1024**3:.2f}GB free / {total_mem/1024**3:.2f}GB total")
-
-    # Fine-tune model
-    print("Starting fine-tuning...")
-    results = model.train(
-        data=config_path,
-        epochs=50,
-        imgsz=640,
-        batch=32,
-        name='linemod_finetune_yolo11n', # Updated name
-        device=device.type,
-        patience=10,
-        save=True,
-        pretrained=True,
-        verbose=True,
-        workers=8
-    )
-
-    # Path to best model (adjust based on the 'name' parameter)
-    best_model_path = os.path.join(os.path.dirname(__file__), f'runs/detect/{results.save_dir.split("/")[-1]}/weights/best.pt') # Dynamically get path
-
-    # Validate on validation set
-    print("\nValidating fine-tuned model...")
-    # Load the best model explicitly for validation
-    best_model = YOLO(best_model_path)
-    val_results = best_model.val(
-        data=config_path,
-        device=device.type
-    )
-
-    print("\nFine-tuning complete! Model saved at:", best_model_path)
-    # Access metrics correctly from the Results object
-    print(f"Validation mAP50-95: {val_results.box.map}")
-    print(f"Validation mAP50: {val_results.box.map50}")
-    print(f"Validation Precision: {val_results.box.mp}") # Mean Precision
-    print(f"Validation Recall: {val_results.box.mr}") # Mean Recall
-
-    # Export a report with metrics comparison
-    print("\nCreating metrics comparison report...")
-
-    # Load original metrics if they exist
-    orig_metrics = {}
-    orig_metrics_path = os.path.join(os.path.dirname(__file__), 'plots/yolo_inference/metrics.yaml')
-    if os.path.exists(orig_metrics_path):
-        try:
-            with open(orig_metrics_path, 'r') as f:
-                orig_metrics_data = yaml.safe_load(f)
-                # Extract overall metrics if available
-                if 'overall' in orig_metrics_data:
-                    orig_metrics = orig_metrics_data['overall']
-                else: # Fallback for older format
-                    orig_metrics = orig_metrics_data
-
-        except Exception as e:
-            print(f"Could not load or parse original metrics file: {e}")
-
-    # Create comparison report
-    report = {
-        'original_model (yolo11n)': {
-            'precision': orig_metrics.get('precision', 'N/A'),
-            'recall': orig_metrics.get('recall', 'N/A'),
-            'f1_score': orig_metrics.get('f1_score', 'N/A')
-        },
-        'finetuned_model (yolo11n)': {
-            'precision': float(val_results.box.mp) if hasattr(val_results.box, 'mp') else 'N/A',
-            'recall': float(val_results.box.mr) if hasattr(val_results.box, 'mr') else 'N/A',
-            'mAP50': float(val_results.box.map50) if hasattr(val_results.box, 'map50') else 'N/A',
-            'mAP50-95': float(val_results.box.map) if hasattr(val_results.box, 'map') else 'N/A'
-        }
-    }
-
-    # Save report
-    report_dir = os.path.join(os.path.dirname(__file__), 'plots/yolo_finetune_yolo11n') # Updated directory name
-    os.makedirs(report_dir, exist_ok=True)
-    report_path = os.path.join(report_dir, 'metrics_comparison.yaml')
-    with open(report_path, 'w') as f:
-        yaml.dump(report, f, default_flow_style=False)
-
-    print(f"Metrics comparison saved to {report_path}")
 
 if __name__ == '__main__':
-    # Add this guard for multiprocessing on Windows/macOS
+    # Add this guard for multiprocessing compatibility
     multiprocessing.freeze_support()
     main()

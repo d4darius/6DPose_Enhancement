@@ -25,3 +25,25 @@ The correct dataset loading can be verified by running the dataset_test.py file 
 `python3.10 dataload/dataset_tests.py`
 
 The output will be stored in the plot/testing directory
+
+## YOLO model Training and Testing
+
+This section describes how to train a YOLO11n model for object detection on the Linemod dataset and evaluate its performance.
+
+In all the 3 following scripts there are many optional args, check them!
+
+### 1. Export Dataset to YOLO Format
+
+Before training, convert the preprocessed Linemod dataset into the format required by YOLO.
+
+`python dataload/yolo_export.py`
+
+### 2. Finetune the model
+
+`python models/yolo/train.py`
+
+### 3. Evaluate
+
+will save a detailed report in models/yolo/test_results
+
+`python models/yolo/test.py --weights models/yolo/runs/detect/linemod_finetune/weights/best.pt`
