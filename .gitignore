@@ -174,3 +174,9 @@ cython_debug/
 .pypirc
 
 .DS_Store
+
+#yolo weights
+*.pt
+
+#yolo training
+runs/
