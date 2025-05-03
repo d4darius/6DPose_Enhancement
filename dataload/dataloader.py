@@ -1,5 +1,6 @@
 import os
 import yaml
+import random
 import numpy as np
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
@@ -7,7 +8,6 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader
 import torch.nn.functional as F
 import torchvision.transforms as transforms
-import open3d as o3d
 from PIL import Image
 import numpy.ma as ma
 import torch
@@ -35,7 +35,6 @@ class PoseDataset(Dataset):
 
         # Object list and metadata
         self.objlist = [1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15]
-        self.meta = {}
         self.pt = {}
 
         # Camera intrinsics
@@ -74,12 +73,8 @@ class PoseDataset(Dataset):
 
     def load_metadata(self):
         for obj_id in self.objlist:
-            meta_path = os.path.join(self.dataset_root, 'data', f"{obj_id:02d}", 'gt.yml')
             model_path = os.path.join(self.dataset_root, 'models', f"obj_{obj_id:02d}.ply")
-            with open(meta_path, 'r') as f:
-                self.meta[obj_id] = yaml.load(f, Loader=yaml.CLoader)
             self.pt[obj_id] = self.load_model_points(model_path)
-
     #Define here some usefull functions to access the data
     def load_image(self, img_path):
         # Load an RGB image and convert to tensor.
@@ -88,16 +83,11 @@ class PoseDataset(Dataset):
     def load_depth(self, depth_path):
         # Load a depth image and convert to tensor.
         depth = Image.open(depth_path)
-        return self.transform(depth)
+        return np.array(depth)
     def load_mask(self, mask_path):
         # Load a mask image and convert to tensor.
         mask = Image.open(mask_path).convert("RGBA")
         return self.transform(mask)
-    def load_model(self, model_path):
-        # Load a 3D model.
-        mesh = o3d.io.read_triangle_mesh(model_path)
-        mesh.compute_vertex_normals()
-        return mesh
     def load_pose(self, pose_path, idx):
         # Load a 6D pose.
         with open(pose_path, 'r') as f:
@@ -123,7 +113,6 @@ class PoseDataset(Dataset):
             points = [list(map(float, f.readline().split()[:3])) for _ in range(int(f.readline().split()[-1]))]
         return np.array(points, dtype=np.float32)
 
-
     def __len__(self):
         #Return the total number of samples in the selected split.
         return len(self.samples)
@@ -134,23 +123,27 @@ class PoseDataset(Dataset):
         # LOADING PATHS
         img_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"rgb/{sample_id:04d}.png")
         depth_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"depth/{sample_id:04d}.png")
-        model_path = os.path.join(self.dataset_root, 'models', f"obj_{folder_id:02d}.ply")
         pose_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"gt.yml") 
         bbx_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"gt.yml")
 
         # DATA
         img = self.load_image(img_path)
         depth = self.load_depth(depth_path)
-        model = self.load_model(model_path)
         rot_mat, tras_vec = self.load_pose(pose_path, sample_id)
+        mask_depth = ma.getmaskarray(ma.masked_not_equal(depth, 0))
 
-        # BB EXTRACTION
+        # BB AND MASK EXTRACTION
         if self.mode != 'eval':
+            # BB from ground truth
             bbx_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"gt.yml")
             rmin, rmax, cmin, cmax = self.get_bbox(self.load_bbx(bbx_path, sample_id))
+            # Mask from ground truth
+            mask_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"mask/{sample_id:04d}.png")
+            label = np.array(Image.open(mask_path))
+            mask_label = ma.getmaskarray(ma.masked_equal(label, np.array([255, 255, 255])))[:, :, 0]
 
         else:
-            # Derive the bounding box using YOLO
+            # Derive the BB using YOLO
             img_resized = F.interpolate(img.unsqueeze(0), size=(640, 640), mode='bilinear', align_corners=False)
             self.model.eval()
             with torch.no_grad():
@@ -183,32 +176,42 @@ class PoseDataset(Dataset):
             # Ensure the bounding box is within image dimensions
             rmin, rmax = max(0, rmin), min(480, rmax)
             cmin, cmax = max(0, cmin), min(640, cmax)
-            print(f"YOLO Bounding Box: {rmin}, {rmax}, {cmin}, {cmax}")
+            # Mask from SegNet
+            mask_path = os.path.join(self.dataset_root, 'segnet_results', f"{folder_id:02d}_label", f"{sample_id:04d}_label.png")
+            label = np.array(Image.open(mask_path))
+            mask_label = ma.getmaskarray(ma.masked_equal(label, np.array(255)))
+        mask = mask_label * mask_depth
 
         # CROP
         img_crop = img[:, rmin:rmax, cmin:cmax]
-        depth_crop = depth[:, rmin:rmax, cmin:cmax]
+        depth_crop = depth[rmin:rmax, cmin:cmax]
 
         # POINT CLOUD
-        cloud, choose = self.sample_points(depth_crop, rmin, rmax, cmin, cmax)
+        cloud, choose = self.sample_points(depth_crop, rmin, rmax, cmin, cmax, mask)
 
         # DATA AUGMENTATION
+        add_t = np.array([random.uniform(-self.noise_trans, self.noise_trans) for i in range(3)])
         if self.add_noise:
-            cloud += np.random.uniform(-self.noise_trans, self.noise_trans, cloud.shape)
+            cloud = np.add(cloud, add_t)
+            img_crop = self.trancolor(img_crop)
         img_crop = self.norm(img_crop)
 
         # MODEL POINTS
         model_points = self.pt[folder_id] / 1000.0
         model_points = self.sample_model_points(model_points)
 
-        # TARGET POINTS
+        # TARGET POSE AND POINTS
         target_r = rot_mat
         target_t = tras_vec
-        target = np.dot(model_points, target_r.T) + target_t
+        target = np.dot(model_points, target_r.T)
+        if self.add_noise:
+            target = np.add(target, target_t + add_t)
+        else:
+            target = np.add(target, target_t)
 
         return {
             "rgb": img,
-            'depth': depth,
+            'depth': torch.from_numpy(depth.astype(np.float32)),
             'cloud': torch.from_numpy(cloud.astype(np.float32)),
             'choose': torch.from_numpy(choose.astype(np.int32)),
             'image': img_crop,
@@ -229,10 +232,10 @@ class PoseDataset(Dataset):
         fix, ax = plt.subplots(1, 3, figsize=(20, 5))
         ax[0].imshow(img.permute(1, 2, 0))
         ax[0].set_title("RGB Image")
-        ax[1].imshow(depth.permute(1, 2, 0), cmap='gray')
+        ax[1].imshow(depth.cpu().numpy(), cmap='gray')
         ax[1].set_title("Depth Image")
         ax[2].imshow(img_np)
-        ax[2].set_title("Cropped and Normalized Image")
+        ax[2].set_title("YOLO Output")
         # Plot 3D point cloud
         fig = go.Figure()
         fig.add_trace(go.Scatter3d(
@@ -297,14 +300,12 @@ class PoseDataset(Dataset):
 
         return rmin, rmax, cmin, cmax
     
-    def sample_points(self, depth, rmin, rmax, cmin, cmax):
-        # TODO: fix
-        depth = depth.squeeze().cpu().numpy()
-        mask = depth > 0
-        choose = mask.flatten().nonzero()[0]
+    def sample_points(self, depth, rmin, rmax, cmin, cmax, mask):
+        choose = mask[rmin:rmax, cmin:cmax].flatten().nonzero()[0]
         if len(choose) == 0:
             choose = np.zeros(self.num_points, dtype=np.int32)
         elif len(choose) > self.num_points:
+            # TODO: choose a better sampling method than random
             choose = np.random.choice(choose, self.num_points, replace=False)
         else:
             choose = np.pad(choose, (0, self.num_points - len(choose)), 'wrap')
@@ -340,7 +341,7 @@ if __name__ == '__main__':
         split='train',
         train_ratio=0.8,
         seed=42,
-        mode='eval'
+        mode='train'
     )
     # DATASET PLOT TEST:
     idx = 201
