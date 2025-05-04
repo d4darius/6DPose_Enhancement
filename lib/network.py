@@ -98,7 +98,8 @@ class PoseNet(nn.Module):
         bs, di, _, _ = out_img.size()
 
         emb = out_img.view(bs, di, -1)
-        choose = choose.repeat(1, di, 1)
+        choose = choose.long().to(emb.device)
+        choose = choose.unsqueeze(1).repeat(1, di, 1)
         emb = torch.gather(emb, 2, choose).contiguous()
         
         x = x.transpose(2, 1).contiguous()
