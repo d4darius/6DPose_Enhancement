@@ -331,10 +331,15 @@ class PoseDataset(Dataset):
         return cloud, choose
 
     def sample_model_points(self, model_points):
-        if len(model_points) > self.num_points:
+        if len(model_points) >= self.num_points:
             indices = np.random.choice(len(model_points), self.num_points, replace=False)
             return model_points[indices]
-        return model_points
+        else:
+            # Not enough points — pad using wrap-around
+            repeat_factor = int(np.ceil(self.num_points / len(model_points)))
+            padded = np.tile(model_points, (repeat_factor, 1))
+            return padded[:self.num_points]
+
     
     def get_sym_list(self):
         return self.symmetry_obj_idx
