@@ -19,7 +19,7 @@ def unnormalize(tensor, mean, std):
     return tensor * std + mean
 
 class PoseDataset(Dataset):
-    def __init__(self, dataset_root, split='train', train_ratio=0.8, seed=42, num_points=500, add_noise=False, noise_trans=0.03, refine=False, mode='train'):
+    def __init__(self, dataset_root, split='train', train_ratio=0.8, seed=42, num_points=500, add_noise=False, noise_trans=0.03, refine=False):
 
         self.dataset_root = dataset_root
         self.split = split
@@ -29,7 +29,6 @@ class PoseDataset(Dataset):
         self.add_noise = add_noise
         self.noise_trans = noise_trans
         self.refine = refine
-        self.mode = mode
         self.args = os.path.join(os.path.dirname(__file__), '../runs/detect/linemod_finetune/weights/last.pt')
         self.model = YOLO(self.args)
 
@@ -45,6 +44,9 @@ class PoseDataset(Dataset):
         self.border_list = [-1, 40, 80, 120, 160, 200, 240, 280, 320, 360, 400, 440, 480, 520, 560, 600, 640, 680]
         self.img_width = 480
         self.img_length = 640
+        self.num_pt_mesh_large = 500
+        self.num_pt_mesh_small = 500
+        self.symmetry_obj_idx = [7, 8]
 
         # Define image transformations
         self.transform = transforms.Compose([
@@ -58,18 +60,25 @@ class PoseDataset(Dataset):
         self.load_metadata()
 
     def load_dataset(self):
-        f = []
         names = [int(n.split("/")[-1]) for n in sorted([f for f in os.listdir(os.path.join(self.dataset_root, 'data')) if os.path.isdir(os.path.join(self.dataset_root, 'data', f))])]
 
         for folder in names:
             folder_path = os.path.join(self.dataset_root, 'data', f"{folder:02d}")
-            samples = len(os.listdir(os.path.join(folder_path, 'rgb')))
-            f.append((folder, samples))
-        all_samples = [(folder, sample_id) for folder, s in f for sample_id in range(s)]
-        if self.split == 'train':
-            self.samples = train_test_split(all_samples, train_size=self.train_ratio, random_state=self.seed)[0]
-        elif self.split == 'val':
-            self.samples = train_test_split(all_samples, train_size=self.train_ratio, random_state=self.seed)[1]
+            if self.split == 'train':
+                sample_path = os.path.join(folder_path, 'train.txt')
+                with open(sample_path, 'r') as f:
+                    lines = f.readlines()
+                    for line in lines:
+                        sample_id = int(line.strip())
+                        self.samples.append((folder, sample_id))
+            else:
+                sample_path = os.path.join(folder_path, 'test.txt')
+                with open(sample_path, 'r') as f:
+                    lines = f.readlines()
+                    for line in lines:
+                        sample_id = int(line.strip())
+                        self.samples.append((folder, sample_id))
+            
 
     def load_metadata(self):
         for obj_id in self.objlist:
@@ -133,16 +142,7 @@ class PoseDataset(Dataset):
         mask_depth = ma.getmaskarray(ma.masked_not_equal(depth, 0))
 
         # BB AND MASK EXTRACTION
-        if self.mode != 'eval':
-            # BB from ground truth
-            bbx_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"gt.yml")
-            rmin, rmax, cmin, cmax = self.get_bbox(self.load_bbx(bbx_path, sample_id))
-            # Mask from ground truth
-            mask_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"mask/{sample_id:04d}.png")
-            label = np.array(Image.open(mask_path))
-            mask_label = ma.getmaskarray(ma.masked_equal(label, np.array([255, 255, 255])))[:, :, 0]
-
-        else:
+        if self.split == 'eval':
             # Derive the BB using YOLO
             img_resized = F.interpolate(img.unsqueeze(0), size=(640, 640), mode='bilinear', align_corners=False)
             self.model.eval()
@@ -180,6 +180,14 @@ class PoseDataset(Dataset):
             mask_path = os.path.join(self.dataset_root, 'segnet_results', f"{folder_id:02d}_label", f"{sample_id:04d}_label.png")
             label = np.array(Image.open(mask_path))
             mask_label = ma.getmaskarray(ma.masked_equal(label, np.array(255)))
+        else:
+            # BB from ground truth
+            bbx_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"gt.yml")
+            rmin, rmax, cmin, cmax = self.get_bbox(self.load_bbx(bbx_path, sample_id))
+            # Mask from ground truth
+            mask_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"mask/{sample_id:04d}.png")
+            label = np.array(Image.open(mask_path))
+            mask_label = ma.getmaskarray(ma.masked_equal(label, np.array([255, 255, 255])))[:, :, 0]
         mask = mask_label * mask_depth
 
         # CROP
@@ -327,6 +335,15 @@ class PoseDataset(Dataset):
             indices = np.random.choice(len(model_points), self.num_points, replace=False)
             return model_points[indices]
         return model_points
+    
+    def get_sym_list(self):
+        return self.symmetry_obj_idx
+    
+    def get_num_points_mesh(self):
+        if self.refine:
+            return self.num_pt_mesh_large
+        else:
+            return self.num_pt_mesh_small
 
 if __name__ == '__main__':
     # CHECK FOR DATASET POSITION
@@ -338,13 +355,12 @@ if __name__ == '__main__':
     # DATASET TEST
     train_dataset = PoseDataset(
         dataset_root=dataset_root,
-        split='train',
+        split='eval',
         train_ratio=0.8,
         seed=42,
-        mode='train'
     )
     # DATASET PLOT TEST:
-    idx = 201
+    idx = 0
     train_dataset.plotitem(idx)
 
     train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True)
