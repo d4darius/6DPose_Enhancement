@@ -34,6 +34,7 @@ class PoseDataset(Dataset):
 
         # Object list and metadata
         self.objlist = [1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15]
+        self.obj_id_map = {real_id: i for i, real_id in enumerate(self.objlist)}
         self.pt = {}
 
         # Camera intrinsics
@@ -128,6 +129,7 @@ class PoseDataset(Dataset):
 
     def __getitem__(self, idx):
         folder_id, sample_id = self.samples[idx]
+        mapped_id = self.obj_id_map[folder_id]
         #print(f"Loading sample {idx}: folder {folder_id}, sample {sample_id}")
         # LOADING PATHS
         img_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"rgb/{sample_id:04d}.png")
@@ -225,7 +227,7 @@ class PoseDataset(Dataset):
             'image': img_crop,
             'target': torch.from_numpy(target.astype(np.float32)),
             'model_points': torch.from_numpy(model_points.astype(np.float32)),
-            'obj_id': torch.tensor(folder_id, dtype=torch.int64)
+            'obj_id': torch.tensor(mapped_id, dtype=torch.int64)
         }
     
     def plotitem(self, idx, show=True):
