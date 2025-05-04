@@ -128,7 +128,7 @@ class PoseDataset(Dataset):
 
     def __getitem__(self, idx):
         folder_id, sample_id = self.samples[idx]
-        print(f"Loading sample {idx}: folder {folder_id}, sample {sample_id}")
+        #print(f"Loading sample {idx}: folder {folder_id}, sample {sample_id}")
         # LOADING PATHS
         img_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"rgb/{sample_id:04d}.png")
         depth_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"depth/{sample_id:04d}.png")

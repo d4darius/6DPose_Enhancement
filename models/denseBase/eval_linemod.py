@@ -71,7 +71,7 @@ num_count = [0 for i in range(num_objects)]
 fw = open('{0}/eval_result_logs.txt'.format(output_result_dir), 'w')
 
 for i, data in enumerate(testdataloader, 0):
-    points, choose, img, target, model_points, idx = data
+    _, _, points, choose, img, target, model_points, idx = data
     if len(points.size()) == 2:
         print('No.{0} NOT Pass! Lost detection!'.format(i))
         fw.write('No.{0} NOT Pass! Lost detection!\n'.format(i))
