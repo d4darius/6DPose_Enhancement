@@ -29,7 +29,7 @@ class PoseDataset(Dataset):
         self.add_noise = add_noise
         self.noise_trans = noise_trans
         self.refine = refine
-        self.args = os.path.join(os.path.dirname(__file__), '../runs/detect/linemod_finetune/weights/last.pt')
+        self.args = os.path.join(os.path.dirname(__file__), '../models/yolo/weights/best.pt')
         self.model = YOLO(self.args)
 
         # Object list and metadata
