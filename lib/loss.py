@@ -55,7 +55,12 @@ def loss_calculation(pred_r, pred_t, pred_c, target, model_points, idx, points, 
     dis = dis.view(bs, num_p)
 
 
-    t = ori_t[which_max[0]] + points[which_max[0]]
+    # First, reshape ori_t and points to (bs, num_p, 3)
+    ori_t = ori_t.view(bs, num_p, 3)
+    points = points.view(bs, num_p, 3)
+
+    # Then, for batch index 0:
+    t = ori_t[0, which_max[0]] + points[0, which_max[0]]
     points = points.view(1, bs * num_p, 3)
 
     ori_base = ori_base[which_max[0]].view(1, 3, 3).contiguous()
