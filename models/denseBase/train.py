@@ -130,7 +130,12 @@ def main():
 
         for rep in range(opt.repeat_epoch):
             for i, data in enumerate(dataloader, 0):
-                _, _, points, choose, img, target, model_points, idx = data
+                points = data['cloud']
+                choose = data['choose']
+                img = data['image']
+                target = data['target']
+                model_points = data['model_points']
+                idx = data['obj_id']
                 points, choose, img, target, model_points, idx = Variable(points).cuda(), \
                                                                  Variable(choose).cuda(), \
                                                                  Variable(img).cuda(), \
@@ -174,7 +179,12 @@ def main():
         refiner.eval()
 
         for j, data in enumerate(testdataloader, 0):
-            _, _, points, choose, img, target, model_points, idx = data
+            points = data['cloud']
+            choose = data['choose']
+            img = data['image']
+            target = data['target']
+            model_points = data['model_points']
+            idx = data['obj_id']
             points, choose, img, target, model_points, idx = Variable(points).cuda(), \
                                                              Variable(choose).cuda(), \
                                                              Variable(img).cuda(), \
