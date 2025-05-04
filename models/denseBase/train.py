@@ -109,7 +109,7 @@ def main():
     criterion = Loss(opt.num_points_mesh, opt.sym_list)
     criterion_refine = Loss_refine(opt.num_points_mesh, opt.sym_list)
 
-    best_test = np.Inf
+    best_test = np.inf
 
     if opt.start_epoch == 1:
         for log in os.listdir(opt.log_dir):
