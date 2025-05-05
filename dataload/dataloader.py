@@ -19,18 +19,15 @@ def unnormalize(tensor, mean, std):
     return tensor * std + mean
 
 class PoseDataset(Dataset):
-    def __init__(self, dataset_root, split='train', train_ratio=0.8, seed=42, num_points=500, add_noise=False, noise_trans=0.03, refine=False):
+    def __init__(self, dataset_root, split='train', seed=42, num_points=500, add_noise=False, noise_trans=0.03, refine=False):
 
         self.dataset_root = dataset_root
         self.split = split
-        self.train_ratio = train_ratio
         self.seed = seed
         self.num_points = num_points
         self.add_noise = add_noise
         self.noise_trans = noise_trans
         self.refine = refine
-        self.args = os.path.join(os.path.dirname(__file__), '../models/yolo/weights/best.pt')
-        self.model = YOLO(self.args)
 
         # Object list and metadata
         self.objlist = [1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15]
@@ -56,6 +53,9 @@ class PoseDataset(Dataset):
         self.trancolor = transforms.ColorJitter(0.2, 0.2, 0.2, 0.05)
         self.norm = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
+        self.args = os.path.join(os.path.dirname(__file__), '../models/yolo/weights/best.pt')
+        self.model = YOLO(self.args)
+
         self.samples = []
         self.load_dataset()
         self.load_metadata()
@@ -80,12 +80,11 @@ class PoseDataset(Dataset):
                         sample_id = int(line.strip())
                         self.samples.append((folder, sample_id))
             
-
+    #Define here some usefull functions to access the data
     def load_metadata(self):
         for obj_id in self.objlist:
             model_path = os.path.join(self.dataset_root, 'models', f"obj_{obj_id:02d}.ply")
             self.pt[obj_id] = self.load_model_points(model_path)
-    #Define here some usefull functions to access the data
     def load_image(self, img_path):
         # Load an RGB image and convert to tensor.
         img = Image.open(img_path).convert("RGB")
@@ -130,7 +129,7 @@ class PoseDataset(Dataset):
     def __getitem__(self, idx):
         folder_id, sample_id = self.samples[idx]
         mapped_id = self.obj_id_map[folder_id]
-        #print(f"Loading sample {idx}: folder {folder_id}, sample {sample_id}")
+
         # LOADING PATHS
         img_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"rgb/{sample_id:04d}.png")
         depth_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"depth/{sample_id:04d}.png")
@@ -362,7 +361,7 @@ if __name__ == '__main__':
     # DATASET TEST
     train_dataset = PoseDataset(
         dataset_root=dataset_root,
-        split='eval',
+        split='train',
         train_ratio=0.8,
         seed=42,
     )
