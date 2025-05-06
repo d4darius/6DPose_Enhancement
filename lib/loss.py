@@ -54,11 +54,12 @@ def loss_calculation(pred_r, pred_t, pred_c, target, model_points, idx, points, 
     how_max, which_max = torch.max(pred_c, 1)
     dis = dis.view(bs, num_p)
 
-    print("which_max:", which_max)
-    print("ori_t shape:", ori_t.shape)
-    print("points shape:", points.shape)
+    if which_max[0] < ori_t.shape[0] and which_max[0] < points.shape[0]:
+        t = ori_t[which_max[0]] + points[which_max[0]]
+    else:
+        print(f"Invalid index {which_max[0]} for ori_t {ori_t.shape} and points {points.shape}")
+        t = ori_t[0] + points[0]
 
-    t = ori_t[which_max[0]] + points[which_max[0]]
     points = points.view(1, bs * num_p, 3)
 
     ori_base = ori_base[which_max[0]].view(1, 3, 3).contiguous()
