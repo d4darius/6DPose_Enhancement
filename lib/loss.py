@@ -54,11 +54,10 @@ def loss_calculation(pred_r, pred_t, pred_c, target, model_points, idx, points, 
     how_max, which_max = torch.max(pred_c, 1)
     dis = dis.view(bs, num_p)
 
-    full_indices = torch.arange(bs, device=which_max.device) * num_p + which_max  # shape: [bs]
-    t = ori_t[full_indices[0]] + points[full_indices[0]]
+    t = ori_t[which_max[0]] + points[which_max[0]]
     points = points.view(1, bs * num_p, 3)
 
-    ori_base = ori_base[full_indices[0]].view(1, 3, 3).contiguous()
+    ori_base = ori_base[which_max[0]].view(1, 3, 3).contiguous()
     ori_t = t.repeat(bs * num_p, 1).contiguous().view(1, bs * num_p, 3)
     new_points = torch.bmm((points - ori_t), ori_base).contiguous()
 
@@ -68,7 +67,7 @@ def loss_calculation(pred_r, pred_t, pred_c, target, model_points, idx, points, 
 
     # print('------------> ', dis[0][which_max[0]].item(), pred_c[0][which_max[0]].item(), idx[0].item())
     del knn
-    return loss, dis[0][full_indices[0]], new_points.detach(), new_target.detach()
+    return loss, dis[0][which_max[0]], new_points.detach(), new_target.detach()
 
 
 class Loss(_Loss):
