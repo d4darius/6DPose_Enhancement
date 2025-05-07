@@ -22,12 +22,19 @@ from lib.loss_refiner import Loss_refine
 from lib.transformations import euler_matrix, quaternion_matrix, quaternion_from_matrix
 from lib.knn_utils import KNearestNeighbor
 
+#--------------------------------------------------------
+# ARGUMENT PARSING: Setup the argument for training
+#--------------------------------------------------------
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset_root', type=str, default = '', help='dataset root dir')
 parser.add_argument('--model', type=str, default = '',  help='resume PoseNet model')
 parser.add_argument('--refine_model', type=str, default = '',  help='resume PoseRefineNet model')
 opt = parser.parse_args()
 
+#--------------------------------------------------------
+# DATASET INITIALIZATION: Setup the dataset
+#--------------------------------------------------------
 num_objects = 13
 objlist = [1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15]
 num_points = 500
@@ -37,6 +44,9 @@ dataset_config_dir = '../dataset/linemod/DenseFusion/Linemod_Preprocessed/models
 output_result_dir = 'experiments/eval_result/linemod'
 knn = KNearestNeighbor(1)
 
+#--------------------------------------------------------
+# MODEL INITIALIZATION: Setup the estimator and refiner models
+#--------------------------------------------------------
 estimator = PoseNet(num_points = num_points, num_obj = num_objects)
 estimator.cuda()
 refiner = PoseRefineNet(num_points = num_points, num_obj = num_objects)
@@ -46,7 +56,7 @@ refiner.load_state_dict(torch.load(opt.refine_model))
 estimator.eval()
 refiner.eval()
 
-testdataset = PoseDataset_linemod(opt.dataset_root, 'val', num_points=opt.num_points, add_noise=False, noise_trans=0.0, refine=opt.refine_start, mode='eval')
+testdataset = PoseDataset_linemod(opt.dataset_root, 'eval', num_points=opt.num_points, add_noise=False, noise_trans=0.0, refine=opt.refine_start)
 testdataloader = torch.utils.data.DataLoader(testdataset, batch_size=1, shuffle=False, num_workers=10)
 
 sym_list = testdataset.get_sym_list()
@@ -70,6 +80,9 @@ success_count = [0 for i in range(num_objects)]
 num_count = [0 for i in range(num_objects)]
 fw = open('{0}/eval_result_logs.txt'.format(output_result_dir), 'w')
 
+#--------------------------------------------------------
+# EVALUATION LOOP: Loop through the test dataset
+#--------------------------------------------------------
 for i, data in enumerate(testdataloader, 0):
     _, _, points, choose, img, target, model_points, idx = data
     if len(points.size()) == 2:
@@ -83,6 +96,9 @@ for i, data in enumerate(testdataloader, 0):
                                                      Variable(model_points).cuda(), \
                                                      Variable(idx).cuda()
 
+    #--------------------------------------------------------
+    # POSE INFERENCE: Estimate the initial pose using PoseNet
+    #--------------------------------------------------------
     pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
     pred_r = pred_r / torch.norm(pred_r, dim=2).view(1, num_points, 1)
     pred_c = pred_c.view(bs, num_points)
@@ -93,6 +109,9 @@ for i, data in enumerate(testdataloader, 0):
     my_t = (points.view(bs * num_points, 1, 3) + pred_t)[which_max[0]].view(-1).cpu().data.numpy()
     my_pred = np.append(my_r, my_t)
 
+    #--------------------------------------------------------
+    # REFINEMENT LOOP: Refine the pose using PoseRefineNet
+    #--------------------------------------------------------
     for ite in range(0, iteration):
         T = Variable(torch.from_numpy(my_t.astype(np.float32))).cuda().view(1, 3).repeat(num_points, 1).contiguous().view(1, num_points, 3)
         my_mat = quaternion_matrix(my_r)
@@ -120,11 +139,17 @@ for i, data in enumerate(testdataloader, 0):
 
     # Here 'my_pred' is the final pose estimation result after refinement ('my_r': quaternion, 'my_t': translation)
 
+    #--------------------------------------------------------
+    # RESULTS: Evaluate the pose estimation result for each object
+    #--------------------------------------------------------
     model_points = model_points[0].cpu().detach().numpy()
     my_r = quaternion_matrix(my_r)[:3, :3]
     pred = np.dot(model_points, my_r.T) + my_t
     target = target[0].cpu().detach().numpy()
 
+    #--------------------------------------------------------
+    # DISTANCE MEASURE: Calculate the distance between the estimated and ground truth poses
+    #--------------------------------------------------------
     if idx[0].item() in sym_list:
         pred = torch.from_numpy(pred.astype(np.float32)).cuda().transpose(1, 0).contiguous()
         target = torch.from_numpy(target.astype(np.float32)).cuda().transpose(1, 0).contiguous()
