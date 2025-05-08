@@ -26,6 +26,18 @@ from lib.loss import Loss
 from lib.loss_refiner import Loss_refine
 from lib.utils import setup_logger
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+if torch.cuda.is_available():
+    print(f"Using GPU: {torch.cuda.get_device_name(0)}")
+    cudnn.benchmark = True
+    cudnn.deterministic = True
+else:
+    print('No GPU available, using CPU instead')
+    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+    cudnn.benchmark = False
+    cudnn.deterministic = False
+
 #--------------------------------------------------------
 # ARGUMENT PARSING: Setup the argument for training
 #--------------------------------------------------------
@@ -34,7 +46,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', type=str, default = 'ycb', help='ycb or linemod')
 parser.add_argument('--dataset_root', type=str, default = '', help='dataset root dir (''YCB_Video_Dataset'' or ''Linemod_preprocessed'')')
 parser.add_argument('--batch_size', type=int, default = 8, help='batch size')
-parser.add_argument('--workers', type=int, default = 10, help='number of data loading workers')
+parser.add_argument('--workers', type=int, default = 2, help='number of data loading workers')
 parser.add_argument('--lr', default=0.0001, help='learning rate')
 parser.add_argument('--lr_rate', default=0.3, help='learning rate decay rate')
 parser.add_argument('--w', default=0.015, help='learning rate')
@@ -72,9 +84,9 @@ def main():
     # MODEL INITIALIZATION: Setup the estimator and refiner models
     #--------------------------------------------------------
     estimator = PoseNet(num_points = opt.num_points, num_obj = opt.num_objects)
-    estimator.cuda()
+    estimator.to(device)
     refiner = PoseRefineNet(num_points = opt.num_points, num_obj = opt.num_objects)
-    refiner.cuda()
+    refiner.to(device)
 
     if opt.resume_posenet != '':
         estimator.load_state_dict(torch.load('{0}/{1}'.format(opt.outf, opt.resume_posenet)))
@@ -143,19 +155,22 @@ def main():
                 target = data['target']
                 model_points = data['model_points']
                 idx = data['obj_id']
-                points, choose, img, target, model_points, idx = Variable(points).cuda(), \
-                                                                 Variable(choose).cuda(), \
-                                                                 Variable(img).cuda(), \
-                                                                 Variable(target).cuda(), \
-                                                                 Variable(model_points).cuda(), \
-                                                                 Variable(idx).cuda()
+                # Debug DataLoader Output
+                print(f"Repetition {rep} -> Data {i}", end=" - ")
+                points, choose, img, target, model_points, idx = Variable(points).to(device), \
+                                                                 Variable(choose).to(device), \
+                                                                 Variable(img).to(device), \
+                                                                 Variable(target).to(device), \
+                                                                 Variable(model_points).to(device), \
+                                                                 Variable(idx).to(device)
                 pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
                 loss, dis, new_points, new_target = criterion(pred_r, pred_t, pred_c, target, model_points, idx, points, opt.w, opt.refine_start)
-                
+                print(loss.item())
                 if opt.refine_start:
                     for ite in range(0, opt.iteration):
                         pred_r, pred_t = refiner(new_points, emb, idx)
                         dis, new_points, new_target = criterion_refine(pred_r, pred_t, new_target, model_points, idx, new_points)
+                        
                         dis.backward()
                 else:
                     loss.backward()
@@ -194,12 +209,12 @@ def main():
             target = data['target']
             model_points = data['model_points']
             idx = data['obj_id']
-            points, choose, img, target, model_points, idx = Variable(points).cuda(), \
-                                                             Variable(choose).cuda(), \
-                                                             Variable(img).cuda(), \
-                                                             Variable(target).cuda(), \
-                                                             Variable(model_points).cuda(), \
-                                                             Variable(idx).cuda()
+            points, choose, img, target, model_points, idx = Variable(points).to(device), \
+                                                             Variable(choose).to(device), \
+                                                             Variable(img).to(device), \
+                                                             Variable(target).to(device), \
+                                                             Variable(model_points).to(device), \
+                                                             Variable(idx).to(device)
             pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
             _, dis, new_points, new_target = criterion(pred_r, pred_t, pred_c, target, model_points, idx, points, opt.w, opt.refine_start)
 
@@ -224,7 +239,7 @@ def main():
             print(epoch, '>>>>>>>>----------BEST TEST MODEL SAVED---------<<<<<<<<')
         
         #--------------------------------------------------------
-        # LR ADJUSTMENT PART: Adjust the learning rate and batch size
+        # LR ADJUSTMENT PART: Adjust the learning rate and weights
         #--------------------------------------------------------
         if best_test < opt.decay_margin and not opt.decay_start:
             opt.decay_start = True
