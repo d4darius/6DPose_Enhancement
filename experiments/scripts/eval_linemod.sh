@@ -3,6 +3,10 @@
 set -x
 set -e
 
+
+# Activate virtual environment
+source densefusion-env/bin/activate
+
 export PYTHONUNBUFFERED="True"
 export CUDA_VISIBLE_DEVICES=0
 

@@ -17,6 +17,7 @@ from lib.network import PoseNet, PoseRefineNet
 from lib.loss import Loss
 from lib.loss_refiner import Loss_refine
 from lib.transformations import euler_matrix, quaternion_matrix, quaternion_from_matrix
+import wandb
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -43,6 +44,18 @@ parser.add_argument('--refine_start', type=bool, default = False, help='whether 
 parser.add_argument('--num_points', type=int, default = 500, help='number of points to sample')
 
 opt = parser.parse_args()
+
+# Initialize W&B
+wandb.init(
+    project="6D-Pose-Estimation-Eval",  # Replace with your project name
+    config={
+        "dataset_root": opt.dataset_root,
+        "model": opt.model,
+        "refine_model": opt.refine_model,
+        "num_points": opt.num_points,
+        "refinement_iterations": 4,
+    }
+)
 
 def main():
     num_objects = 13
@@ -191,6 +204,14 @@ def main():
         else:
             dis = np.mean(np.linalg.norm(pred - target, axis=1))
 
+        # Log metrics to W&B
+        wandb.log({
+            "object_id": idx[0].item(),
+            "distance": dis,
+            "success": dis < diameter[idx[0].item()],
+            "iteration": i,
+        })
+
         if dis < diameter[idx[0].item()]:
             success_count[idx[0].item()] += 1
             print('No.{0} Pass! Distance: {1}'.format(i, dis))
@@ -206,6 +227,9 @@ def main():
     print('ALL success rate: {0}'.format(float(sum(success_count)) / sum(num_count)))
     fw.write('ALL success rate: {0}\n'.format(float(sum(success_count)) / sum(num_count)))
     fw.close()
+
+    # Save evaluation logs to W&B
+    wandb.save('{0}/eval_result_logs.txt'.format(output_result_dir))
 
 if __name__ == '__main__':
     main()

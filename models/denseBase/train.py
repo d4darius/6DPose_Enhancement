@@ -25,6 +25,7 @@ from lib.network import PoseNet, PoseRefineNet
 from lib.loss import Loss
 from lib.loss_refiner import Loss_refine
 from lib.utils import setup_logger
+import wandb
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -61,6 +62,17 @@ parser.add_argument('--resume_refinenet', type=str, default = '',  help='resume 
 parser.add_argument('--start_epoch', type=int, default = 1, help='which epoch to start')
 opt = parser.parse_args()
 
+# Initialize W&B
+wandb.init(
+    project="6D-Pose-Estimation",  # Replace with your project name
+    config={
+        "dataset": opt.dataset,
+        "batch_size": opt.batch_size,
+        "learning_rate": opt.lr,
+        "epochs": opt.nepoch,
+        "refinement_iterations": opt.iteration,
+    }
+)
 
 def main():
     opt.manualSeed = random.randint(1, 10000)
@@ -159,7 +171,7 @@ def main():
                 model_points = data['model_points']
                 idx = data['obj_id']
                 # Debug DataLoader Output
-                print(f"Repetition {rep} -> Data {i}", end=" - ")
+                #print(f"Repetition {rep} -> Data {i}", end=" - ")
                 points, choose, img, target, model_points, idx = Variable(points).to(device), \
                                                                  Variable(choose).to(device), \
                                                                  Variable(img).to(device), \
@@ -168,7 +180,14 @@ def main():
                                                                  Variable(idx).to(device)
                 pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
                 loss, dis, new_points, new_target = criterion(pred_r, pred_t, pred_c, target, model_points, idx, points, opt.w, opt.refine_start)
-                print(loss.item())
+                #print(loss.item())
+                # Log metrics to W&B
+                wandb.log({
+                    "epoch": epoch,
+                    "batch": train_count,
+                    "loss": loss.item(),
+                    "distance": dis.item(),
+                })
                 if opt.refine_start:
                     for ite in range(0, opt.iteration):
                         pred_r, pred_t = refiner(new_points, emb, idx)
@@ -227,6 +246,12 @@ def main():
                     dis, new_points, new_target = criterion_refine(pred_r, pred_t, new_target, model_points, idx, new_points)
 
             test_dis += dis.item()
+            # Log metrics to W&B
+            wandb.log({
+                "epoch": epoch,
+                "test_batch": test_count,
+                "test_distance": dis.item(),
+            })
             logger.info('Test time {0} Test Frame No.{1} dis:{2}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), test_count, dis))
 
             test_count += 1
