@@ -19,7 +19,7 @@ def unnormalize(tensor, mean, std):
     return tensor * std + mean
 
 class PoseDataset(Dataset):
-    def __init__(self, dataset_root, split='train', seed=42, num_points=500, add_noise=False, noise_trans=0.03, refine=False):
+    def __init__(self, dataset_root, split='train', seed=42, num_points=500, add_noise=False, noise_trans=0.03, refine=False, device='cpu'):
 
         self.dataset_root = dataset_root
         self.split = split
@@ -28,6 +28,7 @@ class PoseDataset(Dataset):
         self.add_noise = add_noise
         self.noise_trans = noise_trans
         self.refine = refine
+        self.device = device
 
         # Object list and metadata
         self.objlist = [1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15]
@@ -148,35 +149,40 @@ class PoseDataset(Dataset):
             img_resized = F.interpolate(img.unsqueeze(0), size=(640, 640), mode='bilinear', align_corners=False)
             self.model.eval()
             with torch.no_grad():
-                results = self.model.predict(img_resized, conf=0.5, iou=0.5, device='cpu')
-            if len(results) == 0:
-                raise ValueError(f"No detections found for image {img_path}.")
-            result = results[0]
-            boxes = result.boxes.xyxy.cpu().numpy()
-            confidences = result.boxes.conf.cpu().numpy()
-            class_ids = result.boxes.cls.cpu().numpy()
-            mask = class_ids == (folder_id - 1)
-            if not np.any(mask):
-                raise ValueError(f"No detections found for object {folder_id} in image {img_path}.")
-            boxes = boxes[mask]
-            confidences = confidences[mask]
-            # Get the bounding box with the highest confidence
-            x1, y1, x2, y2  = boxes[np.argmax(confidences)]
-            # Rescale to original image dimensions
-            orig_H, orig_W = img.shape[1:]
-            scale_x = orig_W / 640
-            scale_y = orig_H / 640
+                results = self.model.predict(img_resized, conf=0.5, iou=0.5, device=self.device, verbose=False)
+            if len(results[0].boxes) == 0:
+                return {
+                        "error": "No detection found"
+                    }
+            else:
+                result = results[0]
+                boxes = result.boxes.xyxy.cpu().numpy()
+                confidences = result.boxes.conf.cpu().numpy()
+                class_ids = result.boxes.cls.cpu().numpy()
+                mask = class_ids == (folder_id - 1)
+                if not np.any(mask):
+                    return {
+                        "error": "No detection found"
+                    }
+                boxes = boxes[mask]
+                confidences = confidences[mask]
+                # Get the bounding box with the highest confidence
+                x1, y1, x2, y2  = boxes[np.argmax(confidences)]
+                # Rescale to original image dimensions
+                orig_H, orig_W = img.shape[1:]
+                scale_x = orig_W / 640
+                scale_y = orig_H / 640
 
-            x1_orig = int(x1 * scale_x)
-            x2_orig = int(x2 * scale_x)
-            y1_orig = int(y1 * scale_y)
-            y2_orig = int(y2 * scale_y)
+                x1_orig = int(x1 * scale_x)
+                x2_orig = int(x2 * scale_x)
+                y1_orig = int(y1 * scale_y)
+                y2_orig = int(y2 * scale_y)
 
-            rmin, rmax = int(y1_orig), int(y2_orig)
-            cmin, cmax = int(x1_orig), int(x2_orig)
-            # Ensure the bounding box is within image dimensions
-            rmin, rmax = max(0, rmin), min(480, rmax)
-            cmin, cmax = max(0, cmin), min(640, cmax)
+                rmin, rmax = int(y1_orig), int(y2_orig)
+                cmin, cmax = int(x1_orig), int(x2_orig)
+                # Ensure the bounding box is within image dimensions
+                rmin, rmax = max(0, rmin), min(480, rmax)
+                cmin, cmax = max(0, cmin), min(640, cmax)
             # Mask from SegNet
             mask_path = os.path.join(self.dataset_root, 'segnet_results', f"{folder_id:02d}_label", f"{sample_id:04d}_label.png")
             label = np.array(Image.open(mask_path))
@@ -230,7 +236,18 @@ class PoseDataset(Dataset):
         }
     
     def plotitem(self, idx, show=True):
-        img, depth, cloud, choose, image, target, model_points, obj_id = self.__getitem__(idx).values()
+        data = self.__getitem__(idx)
+        if len(data) == 1:
+            print(data['error'])
+            return
+        image = data['image']
+        depth = data['depth']
+        cloud = data['cloud']
+        choose = data['choose']
+        img = data['rgb']
+        target = data['target']
+        model_points = data['model_points']
+        obj_id = data['obj_id']
         mean = [0.485, 0.456, 0.406]
         std = [0.229, 0.224, 0.225]
 
@@ -361,12 +378,11 @@ if __name__ == '__main__':
     # DATASET TEST
     train_dataset = PoseDataset(
         dataset_root=dataset_root,
-        split='train',
-        train_ratio=0.8,
+        split='eval',
         seed=42,
     )
     # DATASET PLOT TEST:
-    idx = 0
+    idx = 13050
     train_dataset.plotitem(idx)
 
     train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True)

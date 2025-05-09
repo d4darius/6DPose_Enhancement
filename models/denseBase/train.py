@@ -149,6 +149,9 @@ def main():
 
         for rep in range(opt.repeat_epoch):
             for i, data in enumerate(dataloader, 0):
+                if len(data) == 1:
+                    print(data['error'])
+                    continue
                 points = data['cloud']
                 choose = data['choose']
                 img = data['image']
