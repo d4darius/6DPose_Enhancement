@@ -184,6 +184,9 @@ plots/
 #yolo training
 runs/
 
+#output checkpoints
+*.pth
+
 #output logs
 experiments/logs/
 

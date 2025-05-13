@@ -3,6 +3,7 @@ import yaml
 import random
 import numpy as np
 import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
 import plotly.graph_objects as go
 from torch.utils.data import Dataset, DataLoader
 import torch.nn.functional as F
@@ -18,7 +19,7 @@ def unnormalize(tensor, mean, std):
     return tensor * std + mean
 
 class PoseDataset(Dataset):
-    def __init__(self, dataset_root, split='train', seed=42, num_points=500, add_noise=False, noise_trans=0.03, refine=False, device='cpu'):
+    def __init__(self, dataset_root, split='train', split_ratio=0.7, seed=42, num_points=500, add_noise=False, noise_trans=0.03, refine=False, device='cpu'):
 
         self.dataset_root = dataset_root
         self.split = split
@@ -28,6 +29,7 @@ class PoseDataset(Dataset):
         self.noise_trans = noise_trans
         self.refine = refine
         self.device = device
+        self.split_ratio = split_ratio
 
         # Object list and metadata
         self.objlist = [1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15]
@@ -44,7 +46,7 @@ class PoseDataset(Dataset):
         self.img_length = 640
         self.num_pt_mesh_large = 500
         self.num_pt_mesh_small = 500
-        self.symmetry_obj_idx = [7, 8]
+        self.symmetry_obj_idx = [3, 10]
 
         # Define image transformations
         self.transform = transforms.Compose([
@@ -65,20 +67,17 @@ class PoseDataset(Dataset):
 
         for folder in names:
             folder_path = os.path.join(self.dataset_root, 'data', f"{folder:02d}")
+            sample_codes = [int(n.split("/")[-1].split(".")[0]) for n in sorted([f for f in os.listdir(os.path.join(folder_path, 'rgb')) if f.endswith('.png')])]
+            train_samples, test_samples = train_test_split(sample_codes, 
+                                                          test_size=1-self.split_ratio, 
+                                                          random_state=self.seed, 
+                                                          shuffle=True)
             if self.split == 'train':
-                sample_path = os.path.join(folder_path, 'train.txt')
-                with open(sample_path, 'r') as f:
-                    lines = f.readlines()
-                    for line in lines:
-                        sample_id = int(line.strip())
-                        self.samples.append((folder, sample_id))
+                for sample_id in train_samples:
+                    self.samples.append((folder, sample_id))
             else:
-                sample_path = os.path.join(folder_path, 'test.txt')
-                with open(sample_path, 'r') as f:
-                    lines = f.readlines()
-                    for line in lines:
-                        sample_id = int(line.strip())
-                        self.samples.append((folder, sample_id))
+                for sample_id in test_samples:
+                    self.samples.append((folder, sample_id))
             
     #Define here some usefull functions to access the data
     def load_metadata(self):
@@ -184,8 +183,13 @@ class PoseDataset(Dataset):
                 cmin, cmax = max(0, cmin), min(640, cmax)
             # Mask from SegNet
             mask_path = os.path.join(self.dataset_root, 'segnet_results', f"{folder_id:02d}_label", f"{sample_id:04d}_label.png")
-            label = np.array(Image.open(mask_path))
-            mask_label = ma.getmaskarray(ma.masked_equal(label, np.array(255)))
+            if not os.path.exists(mask_path):
+                return {
+                    "error": f"Mask file not found: {mask_path}"
+                }
+            else:
+                label = np.array(Image.open(mask_path))
+                mask_label = ma.getmaskarray(ma.masked_equal(label, np.array(255)))
         else:
             # BB from ground truth
             bbx_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"gt.yml")
@@ -233,6 +237,11 @@ class PoseDataset(Dataset):
             'model_points': torch.from_numpy(model_points.astype(np.float32)),
             'obj_id': torch.tensor(mapped_id, dtype=torch.int64)
         }
+    
+    def getObjectId(self, idx):
+        folder_id, sample_id = self.samples[idx]
+        mapped_id = self.obj_id_map[folder_id]
+        return torch.tensor(mapped_id, dtype=torch.int64)
     
     def plotitem(self, idx, show=True):
         data = self.__getitem__(idx)

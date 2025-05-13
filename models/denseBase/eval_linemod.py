@@ -45,18 +45,6 @@ parser.add_argument('--num_points', type=int, default = 500, help='number of poi
 
 opt = parser.parse_args()
 
-# Initialize W&B
-wandb.init(
-    project="6D-Pose-Estimation-Eval",  # Replace with your project name
-    config={
-        "dataset_root": opt.dataset_root,
-        "model": opt.model,
-        "refine_model": opt.refine_model,
-        "num_points": opt.num_points,
-        "refinement_iterations": 4,
-    }
-)
-
 def main():
     num_objects = 13
     objlist = [1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15]
@@ -77,7 +65,7 @@ def main():
     if not(os.path.exists(opt.model)):
         print('File not found: {0}'.format(opt.model))
         exit(0)
-    estimator.load_state_dict(torch.load(opt.model))
+    estimator.load_state_dict(torch.load(opt.model, map_location=torch.device(device)))
     estimator.eval()
     if os.path.exists(opt.refine_model):
         opt.refine = True
@@ -98,7 +86,7 @@ def main():
         criterion_refine = Loss_refine(num_points_mesh, sym_list)
 
     diameter = []
-    if not os.path.exists(dataset_config_dir):
+    if not(os.path.exists(dataset_config_dir)):
         print('Please set the correct dataset config dir!')
         exit(0)
     if not os.path.exists(output_result_dir):
@@ -118,7 +106,7 @@ def main():
     #--------------------------------------------------------
     for i, data in enumerate(testdataloader, 0):
         if len(data) == 1:
-            print(data['error'])
+            print(data['error'][0])
             continue
         points = data['cloud']
         choose = data['choose']
@@ -204,14 +192,6 @@ def main():
         else:
             dis = np.mean(np.linalg.norm(pred - target, axis=1))
 
-        # Log metrics to W&B
-        wandb.log({
-            "object_id": idx[0].item(),
-            "distance": dis,
-            "success": dis < diameter[idx[0].item()],
-            "iteration": i,
-        })
-
         if dis < diameter[idx[0].item()]:
             success_count[idx[0].item()] += 1
             print('No.{0} Pass! Distance: {1}'.format(i, dis))
@@ -228,8 +208,6 @@ def main():
     fw.write('ALL success rate: {0}\n'.format(float(sum(success_count)) / sum(num_count)))
     fw.close()
 
-    # Save evaluation logs to W&B
-    wandb.save('{0}/eval_result_logs.txt'.format(output_result_dir))
 
 if __name__ == '__main__':
     main()
