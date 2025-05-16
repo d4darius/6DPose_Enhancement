@@ -14,7 +14,6 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
 lib64/
 parts/
 sdist/
@@ -135,6 +134,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+densefusion-env/
 
 # Spyder project settings
 .spyderproject
@@ -175,8 +175,20 @@ cython_debug/
 
 .DS_Store
 
+# plots
+plots/
+
 #yolo weights
 *.pt
 
 #yolo training
 runs/
+
+#output checkpoints
+*.pth
+
+#output logs
+experiments/logs/
+
+#wandb
+wandb/

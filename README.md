@@ -2,21 +2,54 @@
 
 This is a Computer Vision project devoted to the enhancement of a 6D pose extimation model with deep machine learning models
 
+Here is the updated **“Initial Setup”** section for your `README.md`, now covering **both Linux/macOS (Bash)** and **Windows (CMD)** setup scripts with virtual environments:
+
+---
+
 ### Initial Setup
 
-The python version recommended is
+This project is tested and recommended with:
 
-- python 3.10.2
+- **Python 3.10**
+- **CUDA 12.1** (for GPU-enabled setups with PyTorch)
 
-It is suggested to follow these steps:
+#### Automated Setup Options
 
-- Create a virtual environment using `python3.10 -m venv .venv`
-- Launch it using: `source .venv/bin/activate`
-- To verify that it is using the correct version we can use `python --version`
+You can use the provided setup scripts to create a virtual environment and install all dependencies automatically:
 
-To properly start the project it is necessary to ensure the correct installation of all the necessary libraries. To do so, we run the following command:
+#### For Linux/macOS:
 
-`pip3.10 install -r requirements.txt`
+```bash
+# From the project root directory
+bash setup_env.sh
+```
+
+This will create a `.venv` folder outside the repo (in the parent directory) to avoid cluttering and activate the Python 3.10 environment.
+
+- It also install PyTorch 2.2.2 with CUDA 12.1, DenseFusion, Ultralytics, and additional dependencies.
+
+To activate it later:
+
+```bash
+source ../.venv/bin/activate
+```
+
+#### For Windows (CMD):
+
+```cmd
+:: From the project root directory
+setup_env.bat
+```
+
+This will create a `.venv` folder inside the project that uses `python3.10` if it's available in your PATH.
+
+- It also installs all required packages including PyTorch, Ultralytics, and related libraries.
+
+To activate the environment later:
+
+```cmd
+.venv\Scripts\activate.bat
+```
 
 ## Dataset Testing
 
