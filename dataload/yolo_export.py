@@ -8,7 +8,7 @@ from functools import partial
 from collections import defaultdict
 from PIL import Image
 import argparse
-from dataloader import PoseDataset
+from dataload.dataloader import PoseDataset
 
 def process_folder(folder_args, dataset_root, output_dir, split):
     """Worker function to process all samples within a single folder (class) for YOLO format conversion."""
@@ -54,7 +54,12 @@ def process_folder(folder_args, dataset_root, output_dir, split):
 
         # Load bounding box from pre-loaded data
         try:
-            sample_data = bbx_data[sample_id][0]
+            sample_data = bbx_data[sample_id]
+            # Select the bbx of the corresponding obj id
+            for sample in sample_data:
+                if sample['obj_id'] == folder_id:
+                    sample_data = sample
+                    break
             bbx = np.array(sample_data['obj_bb'], dtype=np.float32)
             x, y, width, height = bbx[0], bbx[1], bbx[2], bbx[3]
         except (KeyError, TypeError, IndexError) as e:
