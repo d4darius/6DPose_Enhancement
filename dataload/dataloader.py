@@ -375,6 +375,82 @@ class PoseDataset(Dataset):
             return self.num_pt_mesh_large
         else:
             return self.num_pt_mesh_small
+    
+    @staticmethod
+    def center_pad_collate(batch):
+        """
+        Custom collate function that pads images to a uniform size while keeping them centered,
+        and adjusts the 'choose' indices to account for padding.
+        """
+        # Filter out error samples
+        batch = [sample for sample in batch if 'error' not in sample]
+        if not batch:
+            return {'error': 'Empty batch after filtering'}
+        
+        # Find max dimensions in this batch
+        max_h = max([item['image'].shape[1] for item in batch])
+        max_w = max([item['image'].shape[2] for item in batch])
+        
+        # Round up to next multiple of 8 for predicting the PSPnet output size
+        max_h = ((max_h + 7) // 8) * 8
+        max_w = ((max_w + 7) // 8) * 8
+        
+        # Prepare the output dictionary
+        batch_dict = {k: [] for k in batch[0].keys()}
+        pad_info = []  # Store padding info for debugging
+        
+        for item in batch:
+            # Get original dimensions
+            img = item['image']
+            c, h, w = img.shape
+            
+            # Calculate padding for centering
+            pad_h_top = (max_h - h) // 2
+            pad_h_bottom = max_h - h - pad_h_top
+            pad_w_left = (max_w - w) // 2
+            pad_w_right = max_w - w - pad_w_left
+            
+            # Pad image (keep centered)
+            padded_img = F.pad(img, (pad_w_left, pad_w_right, pad_h_top, pad_h_bottom))
+            batch_dict['image'].append(padded_img)
+            
+            # Update choose indices to account for padding
+            choose = item['choose'].clone()
+            
+            # Convert flattened indices to 2D coordinates in original crop
+            y_orig = choose // w
+            x_orig = choose % w
+            
+            # Adjust coordinates for padding
+            y_padded = y_orig + pad_h_top
+            x_padded = x_orig + pad_w_left
+            
+            # Convert back to flattened indices in padded image
+            padded_choose = y_padded * max_w + x_padded
+            
+            batch_dict['choose'].append(padded_choose)
+            pad_info.append({
+                'original_shape': (h, w),
+                'padded_shape': (max_h, max_w),
+                'padding': (pad_h_top, pad_h_bottom, pad_w_left, pad_w_right)
+            })
+            
+            # Add all other tensors
+            for k in item.keys():
+                if k not in ['image', 'choose']:
+                    batch_dict[k].append(item[k])
+        
+        # Stack tensors
+        for k in batch_dict:
+            try:
+                batch_dict[k] = torch.stack(batch_dict[k])
+            except:
+                # Keep as list if can't be stacked
+                pass
+        
+        # Add padding information for debugging/verification
+        batch_dict['pad_info'] = pad_info
+        return batch_dict
 
 if __name__ == '__main__':
     # CHECK FOR DATASET POSITION

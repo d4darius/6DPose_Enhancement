@@ -93,17 +93,25 @@ class PoseNet(nn.Module):
         self.num_obj = num_obj
 
     def forward(self, img, x, choose, obj):
+        # print('img', img.size())
+        # print('choose', choose.size())
         out_img = self.cnn(img)
+        # print('out_img', out_img.size())
         
         bs, di, _, _ = out_img.size()
 
         emb = out_img.view(bs, di, -1)
+        # print('emb', emb.size())
         choose = choose.long().to(emb.device)
         choose = choose.unsqueeze(1).repeat(1, di, 1)
+        # print('choose', choose.size())
         emb = torch.gather(emb, 2, choose).contiguous()
-        
+        #print(choose[0, 1, :])
         x = x.transpose(2, 1).contiguous()
+        # print('emb', emb.size())
+        # print('x', x.size())
         ap_x = self.feat(x, emb)
+        # print('ap_x', ap_x.size())
 
         rx = F.relu(self.conv1_r(ap_x))
         tx = F.relu(self.conv1_t(ap_x))
@@ -120,15 +128,42 @@ class PoseNet(nn.Module):
         rx = self.conv4_r(rx).view(bs, self.num_obj, 4, self.num_points)
         tx = self.conv4_t(tx).view(bs, self.num_obj, 3, self.num_points)
         cx = torch.sigmoid(self.conv4_c(cx)).view(bs, self.num_obj, 1, self.num_points)
+        # print('rx', rx.size())
+        # print('tx', tx.size())
+        # print('cx', cx.size())
+        out_rx = []
+        out_tx = []
+        out_cx = []
+
+        for b in range(bs):
+            b_rx = torch.index_select(rx[b], 0, obj[b])
+            b_tx = torch.index_select(tx[b], 0, obj[b])
+            b_cx = torch.index_select(cx[b], 0, obj[b])
+            
+            # Match original tensor transformation
+            b_rx = b_rx.contiguous().transpose(2, 1).contiguous()
+            b_cx = b_cx.contiguous().transpose(2, 1).contiguous()
+            b_tx = b_tx.contiguous().transpose(2, 1).contiguous()
+            
+            out_rx.append(b_rx)
+            out_tx.append(b_tx)
+            out_cx.append(b_cx)
+
+        # Stack back into batched tensors
+        out_rx = torch.stack(out_rx)
+        out_tx = torch.stack(out_tx)
+        out_cx = torch.stack(out_cx)
+        out_rx = out_rx.squeeze(1)
+        out_tx = out_tx.squeeze(1)
+        out_cx = out_cx.squeeze(1)
         
-        b = 0
-        out_rx = torch.index_select(rx[b], 0, obj[b])
-        out_tx = torch.index_select(tx[b], 0, obj[b])
-        out_cx = torch.index_select(cx[b], 0, obj[b])
+        # print('out_rx', out_rx.size())
+        # print('out_tx', out_tx.size())
+        # print('out_cx', out_cx.size())
         
-        out_rx = out_rx.contiguous().transpose(2, 1).contiguous()
-        out_cx = out_cx.contiguous().transpose(2, 1).contiguous()
-        out_tx = out_tx.contiguous().transpose(2, 1).contiguous()
+        # out_rx = out_rx.contiguous().transpose(2, 1).contiguous()
+        # out_cx = out_cx.contiguous().transpose(2, 1).contiguous()
+        # out_tx = out_tx.contiguous().transpose(2, 1).contiguous()
         
         return out_rx, out_tx, out_cx, emb.detach()
  

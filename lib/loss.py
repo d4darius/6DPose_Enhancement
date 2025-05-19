@@ -3,64 +3,124 @@ import torch
 
 
 def loss_calculation(pred_r, pred_t, pred_c, target, model_points, idx, points, w, refine, num_point_mesh, sym_list):
-    bs, num_p, _ = pred_c.size()
-
+    bs, num_p, _ = pred_t.size()
+    
+    # Normalize quaternions
     pred_r = pred_r / (torch.norm(pred_r, dim=2).view(bs, num_p, 1))
     
+    # Convert quaternions to rotation matrices - keeping batch structure
     base = torch.cat(((1.0 - 2.0*(pred_r[:, :, 2]**2 + pred_r[:, :, 3]**2)).view(bs, num_p, 1),\
-                      (2.0*pred_r[:, :, 1]*pred_r[:, :, 2] - 2.0*pred_r[:, :, 0]*pred_r[:, :, 3]).view(bs, num_p, 1), \
-                      (2.0*pred_r[:, :, 0]*pred_r[:, :, 2] + 2.0*pred_r[:, :, 1]*pred_r[:, :, 3]).view(bs, num_p, 1), \
-                      (2.0*pred_r[:, :, 1]*pred_r[:, :, 2] + 2.0*pred_r[:, :, 3]*pred_r[:, :, 0]).view(bs, num_p, 1), \
-                      (1.0 - 2.0*(pred_r[:, :, 1]**2 + pred_r[:, :, 3]**2)).view(bs, num_p, 1), \
-                      (-2.0*pred_r[:, :, 0]*pred_r[:, :, 1] + 2.0*pred_r[:, :, 2]*pred_r[:, :, 3]).view(bs, num_p, 1), \
-                      (-2.0*pred_r[:, :, 0]*pred_r[:, :, 2] + 2.0*pred_r[:, :, 1]*pred_r[:, :, 3]).view(bs, num_p, 1), \
-                      (2.0*pred_r[:, :, 0]*pred_r[:, :, 1] + 2.0*pred_r[:, :, 2]*pred_r[:, :, 3]).view(bs, num_p, 1), \
-                      (1.0 - 2.0*(pred_r[:, :, 1]**2 + pred_r[:, :, 2]**2)).view(bs, num_p, 1)), dim=2).contiguous().view(bs * num_p, 3, 3)
+                     (2.0*pred_r[:, :, 1]*pred_r[:, :, 2] - 2.0*pred_r[:, :, 0]*pred_r[:, :, 3]).view(bs, num_p, 1), \
+                     (2.0*pred_r[:, :, 0]*pred_r[:, :, 2] + 2.0*pred_r[:, :, 1]*pred_r[:, :, 3]).view(bs, num_p, 1), \
+                     (2.0*pred_r[:, :, 1]*pred_r[:, :, 2] + 2.0*pred_r[:, :, 3]*pred_r[:, :, 0]).view(bs, num_p, 1), \
+                     (1.0 - 2.0*(pred_r[:, :, 1]**2 + pred_r[:, :, 3]**2)).view(bs, num_p, 1), \
+                     (-2.0*pred_r[:, :, 0]*pred_r[:, :, 1] + 2.0*pred_r[:, :, 2]*pred_r[:, :, 3]).view(bs, num_p, 1), \
+                     (-2.0*pred_r[:, :, 0]*pred_r[:, :, 2] + 2.0*pred_r[:, :, 1]*pred_r[:, :, 3]).view(bs, num_p, 1), \
+                     (2.0*pred_r[:, :, 0]*pred_r[:, :, 1] + 2.0*pred_r[:, :, 2]*pred_r[:, :, 3]).view(bs, num_p, 1), \
+                     (1.0 - 2.0*(pred_r[:, :, 1]**2 + pred_r[:, :, 2]**2)).view(bs, num_p, 1)), dim=2).contiguous().view(bs * num_p, 3, 3)
 
     ori_base = base
     base = base.contiguous().transpose(2, 1).contiguous()
+    
+    # Reshape tensors for batch matrix multiplication
     model_points = model_points.view(bs, 1, num_point_mesh, 3).repeat(1, num_p, 1, 1).view(bs * num_p, num_point_mesh, 3)
     target = target.view(bs, 1, num_point_mesh, 3).repeat(1, num_p, 1, 1).view(bs * num_p, num_point_mesh, 3)
-    ori_target = target
+    ori_target = target.clone()  # Use clone to avoid unintended modifications
+    
     pred_t = pred_t.contiguous().view(bs * num_p, 1, 3)
-    ori_t = pred_t
+    ori_t = pred_t.clone()
     points = points.contiguous().view(bs * num_p, 1, 3)
     pred_c = pred_c.contiguous().view(bs * num_p)
 
+    # Apply rotation and translation
     pred = torch.add(torch.bmm(model_points, base), points + pred_t)
 
+    # CORRECTED: Proper symmetry handling for batched data
     if not refine:
-        if idx[0].item() in sym_list:
-            pred_exp = pred.unsqueeze(2)
-            target_exp = target.unsqueeze(1)
-
-            dist_matrix = torch.norm(pred_exp - target_exp, dim=3)
-            nearest_indices = dist_matrix.argmin(dim=2)
-            batch_indices = torch.arange(pred.size(0), device=pred.device).unsqueeze(1).repeat(1, pred.size(1))
-
-            target = target[batch_indices, nearest_indices]
+        # Create mask of symmetric objects
+        sym_mask = torch.tensor([i.item() in sym_list for i in idx], device=pred.device)
+        
+        if sym_mask.any():
+            # Get indices of flattened batch that correspond to symmetric objects
+            # Each batch item has num_p predictions, map to flattened indices
+            sym_flat_indices = []
+            for b in range(bs):
+                if sym_mask[b]:
+                    start_idx = b * num_p
+                    end_idx = (b + 1) * num_p
+                    sym_flat_indices.extend(range(start_idx, end_idx))
             
+            if sym_flat_indices:
+                sym_flat_indices = torch.tensor(sym_flat_indices, device=pred.device)
+                
+                # Only compute distances for symmetric objects (more efficient)
+                sym_pred = pred[sym_flat_indices]
+                sym_target = target[sym_flat_indices]
+                
+                # Find optimal point correspondences
+                sym_pred_exp = sym_pred.unsqueeze(2)
+                sym_target_exp = sym_target.unsqueeze(1)
+                
+                dist_matrix = torch.norm(sym_pred_exp - sym_target_exp, dim=3)
+                nearest_indices = dist_matrix.argmin(dim=2)
+                
+                # Get batch indices for gather operation
+                batch_size = sym_pred.size(0)
+                batch_indices = torch.arange(batch_size, device=pred.device).unsqueeze(1).repeat(1, sym_pred.size(1))
+                
+                # Update only the symmetric object targets
+                sym_target_updated = sym_target[batch_indices, nearest_indices]
+                target[sym_flat_indices] = sym_target_updated
+    
+    # Compute distances and loss
     dis = torch.mean(torch.norm((pred - target), dim=2), dim=1)
     loss = torch.mean((dis * pred_c - w * torch.log(pred_c)), dim=0)
 
+    # Find highest confidence prediction per batch item
     pred_c = pred_c.view(bs, num_p)
     which_max = pred_c.argmax(dim=1)
-    which_max = which_max.clamp(0, points.size(0) - 1)
     dis = dis.view(bs, num_p)
-
-    t = (ori_t + points)[which_max][0]
-    points = points.view(1, bs * num_p, 3)
-
-    ori_base = ori_base[which_max].view(1, 3, 3).contiguous()
-    ori_t = t.repeat(bs * num_p, 1).contiguous().view(1, bs * num_p, 3)
-    new_points = torch.bmm((points - ori_t), ori_base).contiguous()
-
-    new_target = ori_target[0].view(1, num_point_mesh, 3).contiguous()
-    ori_t = t.repeat(num_point_mesh, 1).contiguous().view(1, num_point_mesh, 3)
-    new_target = torch.bmm((new_target - ori_t), ori_base).contiguous()
-
-    # print('------------> ', dis[0][which_max[0]].item(), pred_c[0][which_max[0]].item(), idx[0].item())
-    return loss, dis[0][which_max], new_points.detach(), new_target.detach()
+    
+    # CORRECTED: Proper batch processing for refinement
+    # Create batch-wise transformations for refinement
+    t_list = []
+    new_points_list = []
+    new_target_list = []
+    
+    for b in range(bs):
+        # Get best prediction for this batch item
+        b_which = which_max[b]
+        flat_idx = b * num_p + b_which
+        
+        # Get translation
+        b_t = (ori_t[flat_idx] + points[flat_idx]).squeeze(0)
+        
+        # Get rotation
+        b_ori_base = ori_base[flat_idx]
+        
+        # Store transformation
+        t_list.append(b_t)
+        
+        # Transform points
+        b_points = points.view(bs * num_p, 3)[b*num_p:(b+1)*num_p]
+        b_points_centered = b_points - b_t
+        b_new_points = torch.matmul(b_points_centered, b_ori_base)
+        new_points_list.append(b_new_points)
+        
+        # Transform target
+        b_target = ori_target[b*num_p, :, :]
+        b_target_centered = b_target - b_t
+        b_new_target = torch.matmul(b_target_centered, b_ori_base)
+        new_target_list.append(b_new_target)
+    
+    # Stack batch results
+    new_points = torch.cat(new_points_list, dim=0).view(bs, num_p, 3)
+    new_target = torch.stack(new_target_list)
+    
+    # Get per-batch metrics for return
+    batch_dis = torch.mean(torch.stack([dis[b, which_max[b]] for b in range(bs)]))
+      
+    return loss, batch_dis, new_points.detach(), new_target.detach()
 
 
 class Loss(_Loss):

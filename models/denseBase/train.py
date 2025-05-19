@@ -87,7 +87,7 @@ def main():
         opt.num_points = 500
         opt.outf = 'checkpoints/linemod'
         opt.log_dir = 'experiments/logs/linemod'
-        opt.repeat_epoch = 20
+        opt.repeat_epoch = 1
     else:
         print('Unknown dataset')
         return
@@ -121,10 +121,10 @@ def main():
     #--------------------------------------------------------
     if opt.dataset == 'linemod':
         dataset = PoseDataset_linemod(opt.dataset_root, 'train', num_points=opt.num_points, add_noise=True, refine=opt.refine_start)
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=opt.batch_size, shuffle=True, num_workers=opt.workers, pin_memory=True)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=opt.batch_size, shuffle=True, num_workers=opt.workers, pin_memory=True, collate_fn=dataset.center_pad_collate)
     if opt.dataset == 'linemod':
         test_dataset = PoseDataset_linemod(opt.dataset_root, 'test', num_points=opt.num_points, add_noise=False, noise_trans=0.0, refine=opt.refine_start)
-    testdataloader = torch.utils.data.DataLoader(test_dataset, batch_size=opt.batch_size, shuffle=False, num_workers=opt.workers, pin_memory=True)
+    testdataloader = torch.utils.data.DataLoader(test_dataset, batch_size=opt.batch_size, shuffle=False, num_workers=opt.workers, pin_memory=True, collate_fn=dataset.center_pad_collate)
     
     opt.sym_list = dataset.get_sym_list()
     opt.num_points_mesh = dataset.get_num_points_mesh()
@@ -200,13 +200,13 @@ def main():
                 train_dis_avg += dis.item()
                 train_count += 1
 
-                if train_count % opt.batch_size == 0:
-                    logger.info('Train time {0} Epoch {1} Batch {2} Frame {3} Avg_dis:{4}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), epoch, int(train_count / opt.batch_size), train_count, train_dis_avg / opt.batch_size))
-                    optimizer.step()
-                    optimizer.zero_grad()
-                    train_dis_avg = 0
+                #if train_count % opt.batch_size == 0:
+                logger.info('Train time {0} Epoch {1} Batch {2} Avg_dis:{3}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), epoch, train_count, train_dis_avg))
+                optimizer.step()
+                optimizer.zero_grad()
+                train_dis_avg = 0
 
-                if train_count != 0 and train_count % 1000 == 0:
+                if train_count != 0 and train_count % 100 == 0:
                     if opt.refine_start:
                         torch.save(refiner.state_dict(), '{0}/pose_refine_model_current.pth'.format(opt.outf))
                     else:
