@@ -172,12 +172,12 @@ def main():
                 idx = data['obj_id']
                 # Debug DataLoader Output
                 #print(f"Repetition {rep} -> Data {i}", end=" - ")
-                points, choose, img, target, model_points, idx = Variable(points).to(device), \
-                                                                 Variable(choose).to(device), \
-                                                                 Variable(img).to(device), \
-                                                                 Variable(target).to(device), \
-                                                                 Variable(model_points).to(device), \
-                                                                 Variable(idx).to(device)
+                points, choose, img, target, model_points, idx = points.to(device), \
+                                                                 choose.to(device), \
+                                                                 img.to(device), \
+                                                                 target.to(device), \
+                                                                 model_points.to(device), \
+                                                                 idx.to(device)
                 pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
                 loss, dis, new_points, new_target = criterion(pred_r, pred_t, pred_c, target, model_points, idx, points, opt.w, opt.refine_start)
                 #print(loss.item())
@@ -211,7 +211,13 @@ def main():
                         torch.save(refiner.state_dict(), '{0}/pose_refine_model_current.pth'.format(opt.outf))
                     else:
                         torch.save(estimator.state_dict(), '{0}/pose_model_current.pth'.format(opt.outf))
+                break
 
+        if opt.refine_start:
+            torch.save(refiner.state_dict(), '{0}/pose_refine_model_current.pth'.format(opt.outf))
+        else:
+            torch.save(estimator.state_dict(), '{0}/pose_model_current.pth'.format(opt.outf))
+                        
         print('>>>>>>>>----------epoch {0} train finish---------<<<<<<<<'.format(epoch))
 
         #--------------------------------------------------------
@@ -224,37 +230,38 @@ def main():
         estimator.eval()
         refiner.eval()
 
-        for j, data in enumerate(testdataloader, 0):
-            points = data['cloud']
-            choose = data['choose']
-            img = data['image']
-            target = data['target']
-            model_points = data['model_points']
-            idx = data['obj_id']
-            points, choose, img, target, model_points, idx = Variable(points).to(device), \
-                                                             Variable(choose).to(device), \
-                                                             Variable(img).to(device), \
-                                                             Variable(target).to(device), \
-                                                             Variable(model_points).to(device), \
-                                                             Variable(idx).to(device)
-            pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
-            _, dis, new_points, new_target = criterion(pred_r, pred_t, pred_c, target, model_points, idx, points, opt.w, opt.refine_start)
+        with torch.no_grad():
+            for j, data in enumerate(testdataloader, 0):
+                points = data['cloud']
+                choose = data['choose']
+                img = data['image']
+                target = data['target']
+                model_points = data['model_points']
+                idx = data['obj_id']
+                points, choose, img, target, model_points, idx = points.to(device), \
+                                                                choose.to(device), \
+                                                                img.to(device), \
+                                                                target.to(device), \
+                                                                model_points.to(device), \
+                                                                idx.to(device)
+                pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
+                _, dis, new_points, new_target = criterion(pred_r, pred_t, pred_c, target, model_points, idx, points, opt.w, opt.refine_start)
 
-            if opt.refine_start:
-                for ite in range(0, opt.iteration):
-                    pred_r, pred_t = refiner(new_points, emb, idx)
-                    dis, new_points, new_target = criterion_refine(pred_r, pred_t, new_target, model_points, idx, new_points)
+                if opt.refine_start:
+                    for ite in range(0, opt.iteration):
+                        pred_r, pred_t = refiner(new_points, emb, idx)
+                        dis, new_points, new_target = criterion_refine(pred_r, pred_t, new_target, model_points, idx, new_points)
 
-            test_dis += dis.item()
-            # Log metrics to W&B
-            wandb.log({
-                "epoch": epoch,
-                "test_batch": test_count,
-                "test_distance": dis.item(),
-            })
-            logger.info('Test time {0} Test Frame No.{1} dis:{2}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), test_count, dis))
+                test_dis += dis.item()
+                # Log metrics to W&B
+                wandb.log({
+                    "epoch": epoch,
+                    "test_batch": test_count,
+                    "test_distance": dis.item(),
+                })
+                logger.info('Test time {0} Test Frame No.{1} dis:{2}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), test_count, dis))
 
-            test_count += 1
+                test_count += 1
 
         test_dis = test_dis / test_count
         logger.info('Test time {0} Epoch {1} TEST FINISH Avg dis: {2}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), epoch, test_dis))
