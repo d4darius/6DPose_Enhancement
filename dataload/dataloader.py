@@ -196,8 +196,13 @@ class PoseDataset(Dataset):
             rmin, rmax, cmin, cmax = self.get_bbox(self.load_bbx(bbx_path, sample_id))
             # Mask from ground truth
             mask_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"mask/{sample_id:04d}.png")
-            label = np.array(Image.open(mask_path))
-            mask_label = ma.getmaskarray(ma.masked_equal(label, np.array([255, 255, 255])))[:, :, 0]
+            if not os.path.exists(mask_path):
+                return {
+                    "error": f"Mask file not found: {mask_path}"
+                }
+            else:
+                label = np.array(Image.open(mask_path))
+                mask_label = ma.getmaskarray(ma.masked_equal(label, np.array([255, 255, 255])))[:, :, 0]
         mask = mask_label * mask_depth
 
         # CROP
