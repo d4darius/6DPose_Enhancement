@@ -161,6 +161,7 @@ def main():
 
         for rep in range(opt.repeat_epoch):
             for i, data in enumerate(dataloader, 0):
+                logger.info('Initial epoch time {0}'.format(time.strftime("%Hh %Mm %Ss")))
                 if len(data) == 1:
                     print(data['error'])
                     continue
@@ -179,7 +180,9 @@ def main():
                                                                  model_points.to(device), \
                                                                  idx.to(device)
                 print(f"Img: {img.size()}, Obj ID: {idx.size()[0]}")
+                logger.info('Before estimator time {0}'.format(time.strftime("%Hh %Mm %Ss")))
                 pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
+                logger.info('Before loss time {0}'.format(time.strftime("%Hh %Mm %Ss")))
                 loss, dis, new_points, new_target = criterion(pred_r, pred_t, pred_c, target, model_points, idx, points, opt.w, opt.refine_start)
                 #print(loss.item())
                 # Log metrics to W&B
@@ -212,6 +215,7 @@ def main():
                         torch.save(refiner.state_dict(), '{0}/pose_refine_model_current.pth'.format(opt.outf))
                     else:
                         torch.save(estimator.state_dict(), '{0}/pose_model_current.pth'.format(opt.outf))
+                logger.info('Finish train time {0}'.format(time.strftime("%Hh %Mm %Ss")))
 
         if opt.refine_start:
             torch.save(refiner.state_dict(), '{0}/pose_refine_model_current.pth'.format(opt.outf))
