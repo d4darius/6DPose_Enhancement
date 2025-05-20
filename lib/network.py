@@ -15,6 +15,8 @@ import numpy as np
 import pdb
 import torch.nn.functional as F
 from lib.pspnet import PSPNet
+from torch_geometric.data import Data
+from torch_geometric.nn import GCNConv
 
 psp_models = {
     'resnet18': lambda: PSPNet(sizes=(1, 2, 3, 6), psp_size=512, deep_features_size=256, backend='resnet18'),
@@ -166,7 +168,115 @@ class PoseNet(nn.Module):
         # out_tx = out_tx.contiguous().transpose(2, 1).contiguous()
         
         return out_rx, out_tx, out_cx, emb.detach()
- 
+    
+class GNNFeat(nn.Module):
+    def __init__(self):
+        super(GNNFeat, self).__init__()
+        self.g_conv1 = torch.nn.Conv1d(3, 64, 1)
+        self.c_conv1 = torch.nn.Conv1d(32, 64, 1)
+
+        self.gnn_conv1 = GCNConv(128, 256)
+        self.gnn_conv2 = GCNConv(256, 512)
+
+    def forward(self, x, emb, graph_data):
+        # We apply pointnet
+        x = F.relu(self.g_conv1(x))
+        emb = F.relu(self.c_conv1(emb))
+
+        # 2-LAYER GNN (with skip connections)
+        fused = torch.cat((x, emb), dim=1)        # (B, 128, N)
+        fused = fused.permute(0, 2, 1).contiguous() # (B, N, 128)
+        fused = fused.view(-1, 128)                 # (B*N, 128)
+        graph_data.x = fused
+        feat, edge_index = graph_data.x, graph_data.edge_index
+        feat_1 = F.relu(self.gnn_conv1(feat, edge_index))
+        feat_2 = self.gnn_conv2(feat_1, edge_index)
+        
+        return torch.cat([feat_1, feat_2], dim=1) # (bs, 256+512, 500)
+
+class GNNPoseNet(nn.Module):
+    def __init__(self, num_points, num_obj):
+        super(GNNPoseNet, self).__init__()
+        self.cnn = ModifiedResnet()
+        self.feat = GNNFeat()
+        
+        self.conv1_r = torch.nn.Conv1d(768, 384, 1)
+        self.conv1_t = torch.nn.Conv1d(768, 384, 1)
+        self.conv1_c = torch.nn.Conv1d(768, 384, 1)
+
+        self.conv2_r = torch.nn.Conv1d(384, 192, 1)
+        self.conv2_t = torch.nn.Conv1d(384, 192, 1)
+        self.conv2_c = torch.nn.Conv1d(384, 192, 1)
+
+        self.conv3_r = torch.nn.Conv1d(192, 96, 1)
+        self.conv3_t = torch.nn.Conv1d(192, 96, 1)
+        self.conv3_c = torch.nn.Conv1d(192, 96, 1)
+
+        self.conv4_r = torch.nn.Conv1d(96, num_obj*4, 1) #quaternion
+        self.conv4_t = torch.nn.Conv1d(96, num_obj*3, 1) #translation
+        self.conv4_c = torch.nn.Conv1d(96, num_obj*1, 1) #confidence
+
+        self.num_points = num_points
+        self.num_obj = num_obj
+
+    def forward(self, img, x, choose, graph_data, obj):
+        out_img = self.cnn(img)
+        
+        bs, di, _, _ = out_img.size()
+
+        emb = out_img.view(bs, di, -1)
+        choose = choose.long().to(emb.device)
+        choose = choose.unsqueeze(1).repeat(1, di, 1)
+        emb = torch.gather(emb, 2, choose).contiguous()
+        x = x.transpose(2, 1).contiguous()
+
+        gnn_fusfeat = self.feat(x, emb, graph_data)
+        gnn_fusfeat = gnn_fusfeat.view(bs, self.num_points, 768).permute(0, 2, 1).contiguous()  # (bs, 768, num_points)
+        print('gnn_fusfeat', gnn_fusfeat.size())
+
+        rx = F.relu(self.conv1_r(gnn_fusfeat))
+        tx = F.relu(self.conv1_t(gnn_fusfeat))
+        cx = F.relu(self.conv1_c(gnn_fusfeat))      
+
+        rx = F.relu(self.conv2_r(rx))
+        tx = F.relu(self.conv2_t(tx))
+        cx = F.relu(self.conv2_c(cx))
+
+        rx = F.relu(self.conv3_r(rx))
+        tx = F.relu(self.conv3_t(tx))
+        cx = F.relu(self.conv3_c(cx))
+
+        rx = self.conv4_r(rx).view(bs, self.num_obj, 4, self.num_points)
+        tx = self.conv4_t(tx).view(bs, self.num_obj, 3, self.num_points)
+        cx = torch.sigmoid(self.conv4_c(cx)).view(bs, self.num_obj, 1, self.num_points)
+
+        out_rx = []
+        out_tx = []
+        out_cx = []
+
+        for b in range(bs):
+            b_rx = torch.index_select(rx[b], 0, obj[b])
+            b_tx = torch.index_select(tx[b], 0, obj[b])
+            b_cx = torch.index_select(cx[b], 0, obj[b])
+            
+            # Match original tensor transformation
+            b_rx = b_rx.contiguous().transpose(2, 1).contiguous()
+            b_cx = b_cx.contiguous().transpose(2, 1).contiguous()
+            b_tx = b_tx.contiguous().transpose(2, 1).contiguous()
+            
+            out_rx.append(b_rx)
+            out_tx.append(b_tx)
+            out_cx.append(b_cx)
+
+        # Stack back into batched tensors
+        out_rx = torch.stack(out_rx)
+        out_tx = torch.stack(out_tx)
+        out_cx = torch.stack(out_cx)
+        out_rx = out_rx.squeeze(1)
+        out_tx = out_tx.squeeze(1)
+        out_cx = out_cx.squeeze(1)
+        
+        return out_rx, out_tx, out_cx, emb.detach()
 
 
 class PoseRefineNetFeat(nn.Module):

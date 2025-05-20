@@ -21,7 +21,7 @@ import torchvision.transforms as transforms
 import torchvision.utils as vutils
 from torch.autograd import Variable
 from dataload.dataloader import PoseDataset as PoseDataset_linemod
-from lib.network import PoseNet, PoseRefineNet
+from lib.network import PoseNet, PoseRefineNet, GNNPoseNet
 from lib.loss import Loss
 from lib.loss_refiner import Loss_refine
 from lib.utils import setup_logger
@@ -61,6 +61,7 @@ parser.add_argument('--nepoch', type=int, default=500, help='max number of epoch
 parser.add_argument('--resume_posenet', type=str, default = '',  help='resume PoseNet model')
 parser.add_argument('--resume_refinenet', type=str, default = '',  help='resume PoseRefineNet model')
 parser.add_argument('--start_epoch', type=int, default = 1, help='which epoch to start')
+parser.add_argument('--gnn', action='store_true', default=False, help='start training on the geometric model')
 opt = parser.parse_args()
 
 # Initialize W&B
@@ -96,26 +97,35 @@ def main():
     #--------------------------------------------------------
     # MODEL INITIALIZATION: Setup the estimator and refiner models
     #--------------------------------------------------------
-    estimator = PoseNet(num_points = opt.num_points, num_obj = opt.num_objects)
-    estimator.to(device)
-    refiner = PoseRefineNet(num_points = opt.num_points, num_obj = opt.num_objects)
-    refiner.to(device)
-
-    if opt.resume_posenet != '':
-        estimator.load_state_dict(torch.load('{0}/{1}'.format(opt.outf, opt.resume_posenet)))
-
-    if opt.resume_refinenet != '':
-        refiner.load_state_dict(torch.load('{0}/{1}'.format(opt.outf, opt.resume_refinenet)))
-        opt.refine_start = True
-        opt.decay_start = True
-        opt.lr *= opt.lr_rate
-        opt.w *= opt.w_rate
-        opt.batch_size = int(opt.batch_size / opt.iteration)
-        optimizer = optim.Adam(refiner.parameters(), lr=opt.lr)
-    else:
+    if opt.gnn:
+        print("Using GNN DenseFusion")
+        estimator = GNNPoseNet(num_points = opt.num_points, num_obj = opt.num_objects)
+        estimator.to(device)
         opt.refine_start = False
         opt.decay_start = False
         optimizer = optim.Adam(estimator.parameters(), lr=opt.lr)
+    else:  
+        print("Using Simple DenseFusion")  
+        estimator = PoseNet(num_points = opt.num_points, num_obj = opt.num_objects)
+        estimator.to(device)
+        refiner = PoseRefineNet(num_points = opt.num_points, num_obj = opt.num_objects)
+        refiner.to(device)
+
+        if opt.resume_posenet != '':
+            estimator.load_state_dict(torch.load('{0}/{1}'.format(opt.outf, opt.resume_posenet)))
+
+        if opt.resume_refinenet != '':
+            refiner.load_state_dict(torch.load('{0}/{1}'.format(opt.outf, opt.resume_refinenet)))
+            opt.refine_start = True
+            opt.decay_start = True
+            opt.lr *= opt.lr_rate
+            opt.w *= opt.w_rate
+            opt.batch_size = int(opt.batch_size / opt.iteration)
+            optimizer = optim.Adam(refiner.parameters(), lr=opt.lr)
+        else:
+            opt.refine_start = False
+            opt.decay_start = False
+            optimizer = optim.Adam(estimator.parameters(), lr=opt.lr)
 
     #--------------------------------------------------------
     # DATASET LOADING: Setup the dataloader and dataset
@@ -171,23 +181,21 @@ def main():
                 img = data['image']
                 target = data['target']
                 model_points = data['model_points']
-                idx = data['obj_id']
                 graph_batch = Batch.from_data_list(data['graph'])
-                ## TODO: pass to the network
-                # Debug DataLoader Output
-                #print(f"Repetition {rep} -> Data {i}", end=" - ")
-                points, choose, img, target, model_points, idx = points.to(device), \
-                                                                 choose.to(device), \
-                                                                 img.to(device), \
-                                                                 target.to(device), \
-                                                                 model_points.to(device), \
-                                                                 idx.to(device)
-                print(f"Img: {img.size()}, Obj ID: {idx.size()[0]}")
-                logger.info('Before estimator time {0}'.format(time.strftime("%Hh %Mm %Ss")))
-                pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
-                logger.info('Before loss time {0}'.format(time.strftime("%Hh %Mm %Ss")))
+                idx = data['obj_id']
+                points, choose, img, target, model_points, graph_batch, idx = points.to(device), \
+                                                                              choose.to(device), \
+                                                                              img.to(device), \
+                                                                              target.to(device), \
+                                                                              model_points.to(device), \
+                                                                              graph_batch.to(device), \
+                                                                              idx.to(device)
+                if opt.gnn:
+                    pred_r, pred_t, pred_c, emb = estimator(img, points, choose, graph_batch, idx)
+                else:
+                    pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
                 loss, dis, new_points, new_target = criterion(pred_r, pred_t, pred_c, target, model_points, idx, points, opt.w, opt.refine_start)
-                #print(loss.item())
+
                 # Log metrics to W&B
                 wandb.log({
                     "epoch": epoch,
@@ -217,7 +225,10 @@ def main():
                     if opt.refine_start:
                         torch.save(refiner.state_dict(), '{0}/pose_refine_model_current.pth'.format(opt.outf))
                     else:
-                        torch.save(estimator.state_dict(), '{0}/pose_model_current.pth'.format(opt.outf))
+                        if opt.gnn:
+                            torch.save(estimator.state_dict(), '{0}/gnn_pose_model_current.pth'.format(opt.outf))
+                        else:
+                            torch.save(estimator.state_dict(), '{0}/pose_model_current.pth'.format(opt.outf))
                 logger.info('Finish train time {0}'.format(time.strftime("%Hh %Mm %Ss")))
 
         if opt.refine_start:
@@ -244,14 +255,19 @@ def main():
                 img = data['image']
                 target = data['target']
                 model_points = data['model_points']
+                graph_batch = Batch.from_data_list(data['graph'])
                 idx = data['obj_id']
-                points, choose, img, target, model_points, idx = points.to(device), \
-                                                                choose.to(device), \
-                                                                img.to(device), \
-                                                                target.to(device), \
-                                                                model_points.to(device), \
-                                                                idx.to(device)
-                pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
+                points, choose, img, target, model_points, graph_batch, idx = points.to(device), \
+                                                                              choose.to(device), \
+                                                                              img.to(device), \
+                                                                              target.to(device), \
+                                                                              model_points.to(device), \
+                                                                              graph_batch.to(device), \
+                                                                              idx.to(device)
+                if opt.gnn:
+                    pred_r, pred_t, pred_c, emb = estimator(img, points, choose, graph_batch, idx)
+                else:
+                    pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
                 _, dis, new_points, new_target = criterion(pred_r, pred_t, pred_c, target, model_points, idx, points, opt.w, opt.refine_start)
 
                 if opt.refine_start:
@@ -277,7 +293,10 @@ def main():
             if opt.refine_start:
                 torch.save(refiner.state_dict(), '{0}/pose_refine_model_{1}_{2}.pth'.format(opt.outf, epoch, test_dis))
             else:
-                torch.save(estimator.state_dict(), '{0}/pose_model_{1}_{2}.pth'.format(opt.outf, epoch, test_dis))
+                if opt.gnn:
+                    torch.save(estimator.state_dict(), '{0}/gnn_pose_model_{1}_{2}.pth'.format(opt.outf, epoch, test_dis))
+                else:
+                    torch.save(estimator.state_dict(), '{0}/pose_model_{1}_{2}.pth'.format(opt.outf, epoch, test_dis))
             print(epoch, '>>>>>>>>----------BEST TEST MODEL SAVED---------<<<<<<<<')
         
         #--------------------------------------------------------
