@@ -35,42 +35,37 @@ def loss_calculation(pred_r, pred_t, pred_c, target, model_points, idx, points, 
     # Apply rotation and translation
     pred = torch.add(torch.bmm(model_points, base), points + pred_t)
 
-    # CORRECTED: Proper symmetry handling for batched data
+    # CORRECTED: Process symmetric objects individually to save memory
     if not refine:
         # Create mask of symmetric objects
         sym_mask = torch.tensor([i.item() in sym_list for i in idx], device=pred.device)
         
         if sym_mask.any():
-            # Get indices of flattened batch that correspond to symmetric objects
-            # Each batch item has num_p predictions, map to flattened indices
-            sym_flat_indices = []
+            # Process each symmetric object separately
             for b in range(bs):
                 if sym_mask[b]:
+                    # Get indices for this batch item
                     start_idx = b * num_p
                     end_idx = (b + 1) * num_p
-                    sym_flat_indices.extend(range(start_idx, end_idx))
-            
-            if sym_flat_indices:
-                sym_flat_indices = torch.tensor(sym_flat_indices, device=pred.device)
-                
-                # Only compute distances for symmetric objects (more efficient)
-                sym_pred = pred[sym_flat_indices]
-                sym_target = target[sym_flat_indices]
-                
-                # Find optimal point correspondences
-                sym_pred_exp = sym_pred.unsqueeze(2)
-                sym_target_exp = sym_target.unsqueeze(1)
-                
-                dist_matrix = torch.norm(sym_pred_exp - sym_target_exp, dim=3)
-                nearest_indices = dist_matrix.argmin(dim=2)
-                
-                # Get batch indices for gather operation
-                batch_size = sym_pred.size(0)
-                batch_indices = torch.arange(batch_size, device=pred.device).unsqueeze(1).repeat(1, sym_pred.size(1))
-                
-                # Update only the symmetric object targets
-                sym_target_updated = sym_target[batch_indices, nearest_indices]
-                target[sym_flat_indices] = sym_target_updated
+                    
+                    # Extract just this object's predictions and targets
+                    obj_pred = pred[start_idx:end_idx]  # Shape: [num_p, num_point_mesh, 3]
+                    obj_target = target[start_idx:end_idx]  # Shape: [num_p, num_point_mesh, 3]
+                    
+                    # Process this object's symmetry (much smaller tensors)
+                    obj_pred_exp = obj_pred.unsqueeze(2)  # Shape: [num_p, num_point_mesh, 1, 3]
+                    obj_target_exp = obj_target.unsqueeze(1)  # Shape: [num_p, 1, num_point_mesh, 3]
+                    
+                    # Calculate distances using much smaller matrices
+                    obj_dist_matrix = torch.norm(obj_pred_exp - obj_target_exp, dim=3)
+                    obj_nearest_indices = obj_dist_matrix.argmin(dim=2)
+                    
+                    # Get indices for gather operation
+                    obj_batch_indices = torch.arange(num_p, device=pred.device).unsqueeze(1).repeat(1, obj_pred.size(1))
+                    
+                    # Update only this object's targets
+                    obj_target_updated = obj_target[obj_batch_indices, obj_nearest_indices]
+                    target[start_idx:end_idx] = obj_target_updated
     
     # Compute distances and loss
     dis = torch.mean(torch.norm((pred - target), dim=2), dim=1)

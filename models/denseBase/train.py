@@ -87,7 +87,7 @@ def main():
         opt.num_points = 500
         opt.outf = 'checkpoints/linemod'
         opt.log_dir = 'experiments/logs/linemod'
-        opt.repeat_epoch = 1
+        opt.repeat_epoch = 2
     else:
         print('Unknown dataset')
         return
@@ -201,7 +201,7 @@ def main():
                 train_count += 1
 
                 #if train_count % opt.batch_size == 0:
-                logger.info('Train time {0} Epoch {1} Batch {2} Avg_dis:{3}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), epoch, train_count, train_dis_avg))
+                logger.info('Train time {0} Epoch {1} Batch {2} Frame{3} Avg_dis:{4}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), epoch, train_count, int(train_count*opt.batch_size), train_dis_avg))
                 optimizer.step()
                 optimizer.zero_grad()
                 train_dis_avg = 0
@@ -211,7 +211,6 @@ def main():
                         torch.save(refiner.state_dict(), '{0}/pose_refine_model_current.pth'.format(opt.outf))
                     else:
                         torch.save(estimator.state_dict(), '{0}/pose_model_current.pth'.format(opt.outf))
-                break
 
         if opt.refine_start:
             torch.save(refiner.state_dict(), '{0}/pose_refine_model_current.pth'.format(opt.outf))
