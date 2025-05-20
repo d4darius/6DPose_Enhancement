@@ -26,6 +26,8 @@ from lib.loss import Loss
 from lib.loss_refiner import Loss_refine
 from lib.utils import setup_logger
 import wandb
+import cProfile
+import pstats
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -120,11 +122,45 @@ def main():
     # DATASET LOADING: Setup the dataloader and dataset
     #--------------------------------------------------------
     if opt.dataset == 'linemod':
-        dataset = PoseDataset_linemod(opt.dataset_root, 'train', num_points=opt.num_points, add_noise=True, refine=opt.refine_start)
+        dataset = PoseDataset_linemod(opt.dataset_root, 'train', num_points=opt.num_points, add_noise=True, refine=opt.refine_start, device=device)
+    
+    # << PROFILING SETUP START >>
+    profile_getitem = True # Set to False to disable profiling
+    profile_count = 0
+    max_profile_count = 5 # Number of __getitem__ calls to profile
+
+    if profile_getitem:
+        print(f"Profiling the first {max_profile_count} calls to dataset.__getitem__...")
+        profiler = cProfile.Profile()
+        
+        # Wrap the original __getitem__ to enable/disable profiler
+        original_getitem = dataset.__class__.__getitem__
+        
+        def profiled_getitem(self_obj, idx):
+            nonlocal profile_count, profiler
+            if profile_count < max_profile_count:
+                if profile_count == 0: # Start profiler on the first desired call
+                    profiler.enable()
+                
+                result = original_getitem(self_obj, idx)
+                
+                profile_count += 1
+                if profile_count == max_profile_count: # Stop profiler after desired number of calls
+                    profiler.disable()
+                    print(f"Finished profiling {max_profile_count} calls. Results will be printed at the end.")
+                return result
+            else:
+                return original_getitem(self_obj, idx)
+
+        # Monkey-patch __getitem__ for the dataset instance
+        dataset.__class__.__getitem__ = profiled_getitem
+    # << PROFILING SETUP END >>
+
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=opt.batch_size, shuffle=True, num_workers=opt.workers, pin_memory=True, collate_fn=dataset.center_pad_collate)
+    
     if opt.dataset == 'linemod':
-        test_dataset = PoseDataset_linemod(opt.dataset_root, 'test', num_points=opt.num_points, add_noise=False, noise_trans=0.0, refine=opt.refine_start)
-    testdataloader = torch.utils.data.DataLoader(test_dataset, batch_size=opt.batch_size, shuffle=False, num_workers=opt.workers, pin_memory=True, collate_fn=dataset.center_pad_collate)
+        test_dataset = PoseDataset_linemod(opt.dataset_root, 'test', num_points=opt.num_points, add_noise=False, noise_trans=0.0, refine=opt.refine_start, device=device)
+    testdataloader = torch.utils.data.DataLoader(test_dataset, batch_size=opt.batch_size, shuffle=False, num_workers=opt.workers, pin_memory=True, collate_fn=dataset.center_pad_collate) # Consider using dataset.center_pad_collate for test_dataset too if not already
     
     opt.sym_list = dataset.get_sym_list()
     opt.num_points_mesh = dataset.get_num_points_mesh()
@@ -308,6 +344,20 @@ def main():
 
             criterion = Loss(opt.num_points_mesh, opt.sym_list)
             criterion_refine = Loss_refine(opt.num_points_mesh, opt.sym_list)
+
+    # At the very end of the main() function, or before exiting, print the stats
+    if profile_getitem and 'profiler' in locals() and profiler.stats:
+        print("\n\n--- cProfile results for dataset.__getitem__ ---")
+        stats = pstats.Stats(profiler).sort_stats('cumulative') # You can also sort by 'time', 'calls'
+        stats.print_stats(30) # Print top 30 functions
+        # To save to a file:
+        # stats.dump_stats('getitem_profile.prof') 
+        # You can then view this file with tools like snakeviz: pip install snakeviz; snakeviz getitem_profile.prof
+    
+    # << PROFILING CLEANUP >>
+    if profile_getitem: # Restore original __getitem__ if it was patched
+        dataset.__class__.__getitem__ = original_getitem
+    # << PROFILING CLEANUP END >>
 
 if __name__ == '__main__':
     main()
