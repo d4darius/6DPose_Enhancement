@@ -47,8 +47,8 @@ else:
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', type=str, default = 'ycb', help='ycb or linemod')
 parser.add_argument('--dataset_root', type=str, default = '', help='dataset root dir (''YCB_Video_Dataset'' or ''Linemod_preprocessed'')')
-parser.add_argument('--batch_size', type=int, default = 8, help='batch size')
-parser.add_argument('--workers', type=int, default = 2, help='number of data loading workers')
+parser.add_argument('--batch_size', type=int, default = 32, help='batch size')
+parser.add_argument('--workers', type=int, default = 4, help='number of data loading workers')
 parser.add_argument('--lr', default=0.0001, help='learning rate')
 parser.add_argument('--lr_rate', default=0.3, help='learning rate decay rate')
 parser.add_argument('--w', default=0.015, help='learning rate')
@@ -88,7 +88,7 @@ def main():
         opt.num_points = 500
         opt.outf = 'checkpoints/linemod'
         opt.log_dir = 'experiments/logs/linemod'
-        opt.repeat_epoch = 1
+        opt.repeat_epoch = 2
     else:
         print('Unknown dataset')
         return
@@ -162,6 +162,7 @@ def main():
 
         for rep in range(opt.repeat_epoch):
             for i, data in enumerate(dataloader, 0):
+                logger.info('Initial epoch time {0}'.format(time.strftime("%Hh %Mm %Ss")))
                 if len(data) == 1:
                     print(data['error'])
                     continue
@@ -181,7 +182,10 @@ def main():
                                                                  target.to(device), \
                                                                  model_points.to(device), \
                                                                  idx.to(device)
+                print(f"Img: {img.size()}, Obj ID: {idx.size()[0]}")
+                logger.info('Before estimator time {0}'.format(time.strftime("%Hh %Mm %Ss")))
                 pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
+                logger.info('Before loss time {0}'.format(time.strftime("%Hh %Mm %Ss")))
                 loss, dis, new_points, new_target = criterion(pred_r, pred_t, pred_c, target, model_points, idx, points, opt.w, opt.refine_start)
                 #print(loss.item())
                 # Log metrics to W&B
@@ -204,7 +208,7 @@ def main():
                 train_count += 1
 
                 #if train_count % opt.batch_size == 0:
-                logger.info('Train time {0} Epoch {1} Batch {2} Avg_dis:{3}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), epoch, train_count, train_dis_avg))
+                logger.info('Train time {0} Epoch {1} Batch {2} Frame {3} Avg_dis:{4}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), epoch, train_count, int(train_count*idx.size()[0]), train_dis_avg))
                 optimizer.step()
                 optimizer.zero_grad()
                 train_dis_avg = 0
@@ -214,7 +218,7 @@ def main():
                         torch.save(refiner.state_dict(), '{0}/pose_refine_model_current.pth'.format(opt.outf))
                     else:
                         torch.save(estimator.state_dict(), '{0}/pose_model_current.pth'.format(opt.outf))
-                break
+                logger.info('Finish train time {0}'.format(time.strftime("%Hh %Mm %Ss")))
 
         if opt.refine_start:
             torch.save(refiner.state_dict(), '{0}/pose_refine_model_current.pth'.format(opt.outf))
