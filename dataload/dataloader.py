@@ -35,6 +35,7 @@ class PoseDataset(Dataset):
         self.objlist = [1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15]
         self.obj_id_map = {real_id: i for i, real_id in enumerate(self.objlist)}
         self.pt = {}
+        self.gt_data_cache = {} # New: Cache for gt.yml data
 
         # Camera intrinsics
         self.cam_cx = 325.26110
@@ -61,7 +62,12 @@ class PoseDataset(Dataset):
         self.samples = []
         self.load_dataset()
         self.load_metadata()
+        self.preload_gt_data()
 
+        # Precompute full xmap and ymap
+        self.xmap_full = np.array([[j for _ in range(self.img_length)] for j in range(self.img_width)])
+        self.ymap_full = np.array([[i for i in range(self.img_length)] for _ in range(self.img_width)])
+        
     def load_dataset(self):
         names = [int(n.split("/")[-1]) for n in sorted([f for f in os.listdir(os.path.join(self.dataset_root, 'data')) if os.path.isdir(os.path.join(self.dataset_root, 'data', f))])]
 
@@ -78,8 +84,27 @@ class PoseDataset(Dataset):
             else:
                 for sample_id in test_samples:
                     self.samples.append((folder, sample_id))
-            
-    #Define here some usefull functions to access the data
+
+    def preload_gt_data(self):
+        print("Preloading ground truth YAML data...")
+        folder_ids = sorted(list(set(sample[0] for sample in self.samples))) # Get unique folder_ids
+        for folder_id in folder_ids:
+            gt_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", "gt.yml")
+            if os.path.exists(gt_path):
+                with open(gt_path, 'r') as f:
+                    self.gt_data_cache[folder_id] = yaml.load(f, Loader=yaml.CLoader)
+            else:
+                print(f"Warning: gt.yml not found for folder {folder_id}")
+        print("Finished preloading ground truth YAML data.")
+    
+    def load_model_points(self, path):
+        with open(path) as f:
+            assert f.readline().strip() == "ply"
+            while f.readline().strip() != "end_header":
+                continue
+            points = [list(map(float, f.readline().split()[:3])) for _ in range(int(f.readline().split()[-1]))]
+        return np.array(points, dtype=np.float32)
+
     def load_metadata(self):
         for obj_id in self.objlist:
             model_path = os.path.join(self.dataset_root, 'models', f"obj_{obj_id:02d}.ply")
@@ -96,49 +121,72 @@ class PoseDataset(Dataset):
         # Load a mask image and convert to tensor.
         mask = Image.open(mask_path).convert("RGBA")
         return self.transform(mask)
-    def load_pose(self, pose_path, idx):
-        # Load a 6D pose.
-        with open(pose_path, 'r') as f:
-            pose_data = yaml.load(f, Loader=yaml.CLoader)
-            sample_data = pose_data[idx][0]
-            # Convert to numpy array
-            rot_mat = np.array(sample_data['cam_R_m2c'], dtype=np.float32).reshape(3, 3)
-            tras_vec = np.array(sample_data['cam_t_m2c'], dtype=np.float32) / 1000.0
-        return rot_mat, tras_vec
-    def load_bbx(self, bbx_path, idx):
-        # Load a bounding box.
-        with open(bbx_path, 'r') as f:
-            bbx_data = yaml.load(f, Loader=yaml.CLoader)
-            sample_data = bbx_data[idx][0]
-            # Convert to numpy array
-            bbx = np.array(sample_data['obj_bb'], dtype=np.float32)
-        return bbx[0], bbx[1], bbx[2], bbx[3]
-    def load_model_points(self, path):
-        with open(path) as f:
-            assert f.readline().strip() == "ply"
-            while f.readline().strip() != "end_header":
-                continue
-            points = [list(map(float, f.readline().split()[:3])) for _ in range(int(f.readline().split()[-1]))]
-        return np.array(points, dtype=np.float32)
+    def load_pose(self, folder_id, sample_id_in_yaml): # Modified arguments
+        # Load a 6D pose from cached data
+        if folder_id not in self.gt_data_cache:
+            # This should ideally not happen if preload_gt_data worked
+            raise ValueError(f"gt.yml data for folder {folder_id} not found in cache.")
+        
+        pose_data_for_folder = self.gt_data_cache[folder_id]
+        
+        if sample_id_in_yaml not in pose_data_for_folder:
+             raise ValueError(f"Sample ID {sample_id_in_yaml} not found in gt.yml for folder {folder_id}")
 
+        sample_data_list = pose_data_for_folder[sample_id_in_yaml]
+        if not sample_data_list: # Check if the list is empty
+            raise ValueError(f"No pose data for sample ID {sample_id_in_yaml} in folder {folder_id}")
+
+        sample_data = sample_data_list[0] # Assuming there's always at least one item if key exists
+        rot_mat = np.array(sample_data['cam_R_m2c'], dtype=np.float32).reshape(3, 3)
+        tras_vec = np.array(sample_data['cam_t_m2c'], dtype=np.float32) / 1000.0
+        return rot_mat, tras_vec
+
+    def load_bbx(self, folder_id, sample_id_in_yaml): # Modified arguments
+        # Load a bounding box from cached data
+        if folder_id not in self.gt_data_cache:
+            raise ValueError(f"gt.yml data for folder {folder_id} not found in cache.")
+        
+        bbx_data_for_folder = self.gt_data_cache[folder_id]
+
+        if sample_id_in_yaml not in bbx_data_for_folder:
+             raise ValueError(f"Sample ID {sample_id_in_yaml} not found in gt.yml for folder {folder_id}")
+        
+        sample_data_list = bbx_data_for_folder[sample_id_in_yaml]
+        if not sample_data_list:
+             raise ValueError(f"No bounding box data for sample ID {sample_id_in_yaml} in folder {folder_id}")
+
+        sample_data = sample_data_list[0]
+        bbx = np.array(sample_data['obj_bb'], dtype=np.float32)
+        return bbx[0], bbx[1], bbx[2], bbx[3] # Assuming these are x, y, w, h
+
+            
+    #Define here some usefull functions to access the data
     def __len__(self):
         #Return the total number of samples in the selected split.
         return len(self.samples)
 
     def __getitem__(self, idx):
-        folder_id, sample_id = self.samples[idx]
+        folder_id, sample_id = self.samples[idx] # sample_id here is the file name like 0000, 0001
         mapped_id = self.obj_id_map[folder_id]
 
-        # LOADING PATHS
+        # LOADING PATHS (only for non-YAML data now)
         img_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"rgb/{sample_id:04d}.png")
         depth_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"depth/{sample_id:04d}.png")
-        pose_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"gt.yml") 
-        bbx_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"gt.yml")
+        # pose_path and bbx_path are no longer needed here directly for file opening
 
         # DATA
         img = self.load_image(img_path)
         depth = self.load_depth(depth_path)
-        rot_mat, tras_vec = self.load_pose(pose_path, sample_id)
+        
+        # Use sample_id as the key for the YAML data, which seems to be 0-indexed in the YAML file
+        # The sample_id from self.samples is the file name (e.g., 0, 1, 2, ... for 0000.png, 0001.png)
+        yaml_key_sample_id = sample_id 
+
+        try:
+            rot_mat, tras_vec = self.load_pose(folder_id, yaml_key_sample_id)
+        except ValueError as e:
+            return {"error": f"Error loading pose for folder {folder_id}, sample {sample_id} (yaml key {yaml_key_sample_id}): {e}"}
+
         mask_depth = ma.getmaskarray(ma.masked_not_equal(depth, 0))
 
         # BB AND MASK EXTRACTION
@@ -189,11 +237,15 @@ class PoseDataset(Dataset):
                 }
             else:
                 label = np.array(Image.open(mask_path))
-                mask_label = ma.getmaskarray(ma.masked_equal(label, np.array(255)))
-        else:
-            # BB from ground truth
-            bbx_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"gt.yml")
-            rmin, rmax, cmin, cmax = self.get_bbox(self.load_bbx(bbx_path, sample_id))
+                mask_label = ma.getmaskarray(ma.masked_equal(label, np.array(255))) # Assuming 255 is object
+        else: # 'train' split
+            try:
+                # BB from ground truth (cached)
+                x, y, w, h = self.load_bbx(folder_id, yaml_key_sample_id)
+                rmin, rmax, cmin, cmax = self.get_bbox([x,y,w,h]) # Pass as a list/tuple
+            except ValueError as e:
+                 return {"error": f"Error loading bbx for folder {folder_id}, sample {sample_id} (yaml key {yaml_key_sample_id}): {e}"}
+
             # Mask from ground truth
             mask_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"mask/{sample_id:04d}.png")
             if not os.path.exists(mask_path):
@@ -202,7 +254,19 @@ class PoseDataset(Dataset):
                 }
             else:
                 label = np.array(Image.open(mask_path))
-                mask_label = ma.getmaskarray(ma.masked_equal(label, np.array([255, 255, 255])))[:, :, 0]
+                # Ensure mask_label is boolean and 2D
+                if label.ndim == 3 and label.shape[2] >= 3: # Check if it's an RGB-like mask
+                     mask_label = np.all(label == [255,255,255], axis=2)
+                elif label.ndim == 2: # Grayscale mask
+                     mask_label = (label == 255) # Assuming 255 is the object
+                else:
+                     return {"error": f"Unexpected mask format for {mask_path}"}
+                mask_label = ma.getmaskarray(ma.masked_equal(mask_label, False)) # Mask where it's False (background)
+
+        # Ensure rmin, rmax, cmin, cmax are defined before this point for both splits
+        if 'rmin' not in locals() or 'rmax' not in locals() or 'cmin' not in locals() or 'cmax' not in locals():
+             return {"error": f"Bounding box coordinates not defined for folder {folder_id}, sample {sample_id}"}
+
         mask = mask_label * mask_depth
 
         # CROP
@@ -350,10 +414,12 @@ class PoseDataset(Dataset):
             choose = np.pad(choose, (0, self.num_points - len(choose)), 'wrap')
 
         depth_masked = depth.flatten()[choose][:, np.newaxis]
-        xmap = np.array([[j for i in range(640)] for j in range(480)])
-        ymap = np.array([[i for i in range(640)] for j in range(480)])
-        xmap_masked = xmap[rmin:rmax, cmin:cmax].flatten()[choose][:, np.newaxis]
-        ymap_masked = ymap[rmin:rmax, cmin:cmax].flatten()[choose][:, np.newaxis]
+        # Slice from precomputed maps
+        xmap_crop = self.xmap_full[rmin:rmax, cmin:cmax]
+        ymap_crop = self.ymap_full[rmin:rmax, cmin:cmax]
+
+        xmap_masked = xmap_crop.flatten()[choose][:, np.newaxis]
+        ymap_masked = ymap_crop.flatten()[choose][:, np.newaxis]
 
         pt2 = depth_masked / 1000.0
         pt0 = (ymap_masked - self.cam_cx) * pt2 / self.cam_fx
