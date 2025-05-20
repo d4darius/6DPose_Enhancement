@@ -26,6 +26,7 @@ from lib.loss import Loss
 from lib.loss_refiner import Loss_refine
 from lib.utils import setup_logger
 import wandb
+from torch_geometric.data import Batch
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -170,6 +171,8 @@ def main():
                 target = data['target']
                 model_points = data['model_points']
                 idx = data['obj_id']
+                graph_batch = Batch.from_data_list(data['graph'])
+                ## TODO: pass to the network
                 # Debug DataLoader Output
                 #print(f"Repetition {rep} -> Data {i}", end=" - ")
                 points, choose, img, target, model_points, idx = points.to(device), \

@@ -12,11 +12,22 @@ from PIL import Image
 import numpy.ma as ma
 import torch
 from ultralytics import YOLO
+from torch_geometric.data import Data
+from torch_geometric.transforms import KNNGraph
+import networkx as nx
+import matplotlib.pyplot as plt
+from torch_geometric.utils import to_networkx
 
 def unnormalize(tensor, mean, std):
     mean = torch.tensor(mean).view(3, 1, 1)
     std = torch.tensor(std).view(3, 1, 1)
     return tensor * std + mean
+
+def to_graph_data(cloud, k=6):
+    cloud_tensor = torch.from_numpy(cloud.astype(np.float32))
+    data = Data(pos=cloud_tensor)
+    data = KNNGraph(k=k)(data)
+    return data
 
 class PoseDataset(Dataset):
     def __init__(self, dataset_root, split='train', split_ratio=0.7, seed=42, num_points=500, add_noise=False, noise_trans=0.03, refine=False, device='cpu'):
@@ -211,6 +222,7 @@ class PoseDataset(Dataset):
 
         # POINT CLOUD
         cloud, choose = self.sample_points(depth_crop, rmin, rmax, cmin, cmax, mask)
+        graph_data = to_graph_data(cloud)
 
         # DATA AUGMENTATION
         add_t = np.array([random.uniform(-self.noise_trans, self.noise_trans) for i in range(3)])
@@ -236,6 +248,7 @@ class PoseDataset(Dataset):
             "rgb": img,
             'depth': torch.from_numpy(depth.astype(np.float32)),
             'cloud': torch.from_numpy(cloud.astype(np.float32)),
+            'graph': graph_data,
             'choose': torch.from_numpy(choose.astype(np.int32)),
             'image': img_crop,
             'target': torch.from_numpy(target.astype(np.float32)),
@@ -261,6 +274,11 @@ class PoseDataset(Dataset):
         target = data['target']
         model_points = data['model_points']
         obj_id = data['obj_id']
+        graph = data['graph']
+
+        # Convert to NetworkX graph
+        G = to_networkx(graph, to_undirected=True)
+
         mean = [0.485, 0.456, 0.406]
         std = [0.229, 0.224, 0.225]
 
@@ -268,13 +286,16 @@ class PoseDataset(Dataset):
         img_np = unnorm_img.permute(1, 2, 0).cpu().numpy()
         img_np = np.clip(img_np, 0, 1)
 
-        fix, ax = plt.subplots(1, 3, figsize=(20, 5))
+        fix, ax = plt.subplots(1, 4, figsize=(20, 5))
         ax[0].imshow(img.permute(1, 2, 0))
         ax[0].set_title("RGB Image")
         ax[1].imshow(depth.cpu().numpy(), cmap='gray')
         ax[1].set_title("Depth Image")
         ax[2].imshow(img_np)
         ax[2].set_title("YOLO Output")
+        pos = {i: (graph.pos[i][0].item(), graph.pos[i][1].item()) for i in range(graph.pos.size(0))}
+        nx.draw(G, pos, ax=ax[3], with_labels=False, node_size=10, node_color='red', edge_color='black')
+        ax[3].set_title("Graph (Top-down)")
         # Plot 3D point cloud
         fig = go.Figure()
         fig.add_trace(go.Scatter3d(
@@ -309,6 +330,8 @@ class PoseDataset(Dataset):
             title=f"3D Point Cloud (Object ID: {obj_id.item()})"
         )
         fig.show()
+        
+
         # Create the directory if it doesn't exist
         if not(os.path.exists(os.path.join(os.path.dirname(__file__), '../plots/testing'))):
             os.makedirs(os.path.join(os.path.dirname(__file__), '../plots/testing'))
@@ -471,7 +494,7 @@ if __name__ == '__main__':
         seed=42,
     )
     # DATASET PLOT TEST:
-    idx = 13050
+    idx = 3050
     train_dataset.plotitem(idx)
 
     train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True)
