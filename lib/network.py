@@ -159,14 +159,6 @@ class PoseNet(nn.Module):
         out_tx = out_tx.squeeze(1)
         out_cx = out_cx.squeeze(1)
         
-        # print('out_rx', out_rx.size())
-        # print('out_tx', out_tx.size())
-        # print('out_cx', out_cx.size())
-        
-        # out_rx = out_rx.contiguous().transpose(2, 1).contiguous()
-        # out_cx = out_cx.contiguous().transpose(2, 1).contiguous()
-        # out_tx = out_tx.contiguous().transpose(2, 1).contiguous()
-        
         return out_rx, out_tx, out_cx, emb.detach()
     
 class GNNFeat(nn.Module):
@@ -344,8 +336,21 @@ class PoseRefineNet(nn.Module):
         rx = self.conv3_r(rx).view(bs, self.num_obj, 4)
         tx = self.conv3_t(tx).view(bs, self.num_obj, 3)
 
-        b = 0
-        out_rx = torch.index_select(rx[b], 0, obj[b])
-        out_tx = torch.index_select(tx[b], 0, obj[b])
+        # b = 0
+        # out_rx = torch.index_select(rx[b], 0, obj[b])
+        # out_tx = torch.index_select(tx[b], 0, obj[b])
+        
+        for b in range(bs):
+            b_rx = torch.index_select(rx[b], 0, obj[b])
+            b_tx = torch.index_select(tx[b], 0, obj[b])
+            
+            out_rx.append(b_rx)
+            out_tx.append(b_tx)
+
+        # Stack back into batched tensors
+        out_rx = torch.stack(out_rx)
+        out_tx = torch.stack(out_tx)
+        # out_rx = out_rx.squeeze(1)
+        # out_tx = out_tx.squeeze(1)
 
         return out_rx, out_tx

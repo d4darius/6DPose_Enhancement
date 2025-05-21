@@ -35,7 +35,7 @@ def loss_calculation(pred_r, pred_t, pred_c, target, model_points, idx, points, 
     # Apply rotation and translation
     pred = torch.add(torch.bmm(model_points, base), points + pred_t)
 
-    # CORRECTED: Process symmetric objects individually to save memory
+    # Why symmetri is not considered in refinement?
     if not refine:
         # Create mask of symmetric objects
         sym_mask = torch.tensor([i.item() in sym_list for i in idx], device=pred.device)
