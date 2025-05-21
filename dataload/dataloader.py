@@ -12,6 +12,7 @@ from PIL import Image
 import numpy.ma as ma
 import torch
 from ultralytics import YOLO
+import open3d as o3d
 from torch_geometric.data import Data
 from torch_geometric.transforms import KNNGraph
 import networkx as nx
@@ -30,7 +31,7 @@ def to_graph_data(cloud, k=6):
     return data
 
 class PoseDataset(Dataset):
-    def __init__(self, dataset_root, split='train', split_ratio=0.7, seed=42, num_points=500, add_noise=False, noise_trans=0.03, refine=False, device='cpu'):
+    def __init__(self, dataset_root, split='train', split_ratio=0.7, seed=42, num_points=500, add_noise=False, noise_trans=0.03, refine=False, device='cpu', sampling='random'):
 
         self.dataset_root = dataset_root
         self.split = split
@@ -41,6 +42,7 @@ class PoseDataset(Dataset):
         self.refine = refine
         self.device = device
         self.split_ratio = split_ratio
+        self.sampling = sampling
 
         # Object list and metadata
         self.objlist = [1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15]
@@ -439,8 +441,27 @@ class PoseDataset(Dataset):
         if len(choose) == 0:
             choose = np.zeros(self.num_points, dtype=np.int32)
         elif len(choose) > self.num_points:
-            # TODO: choose a better sampling method than random
-            choose = np.random.choice(choose, self.num_points, replace=False)
+            if self.sampling == 'random':
+                choose = np.random.choice(choose, self.num_points, replace=False)
+            elif self.sampling == 'FPS' or self.sampling == 'curvature':
+                depth_masked = depth.flatten()[choose][:, np.newaxis]
+                # Slice from precomputed maps
+                xmap_crop = self.xmap_full[rmin:rmax, cmin:cmax]
+                ymap_crop = self.ymap_full[rmin:rmax, cmin:cmax]
+
+                xmap_masked = xmap_crop.flatten()[choose][:, np.newaxis]
+                ymap_masked = ymap_crop.flatten()[choose][:, np.newaxis]
+
+                pt2 = depth_masked / 1000.0
+                pt0 = (ymap_masked - self.cam_cx) * pt2 / self.cam_fx
+                pt1 = (xmap_masked - self.cam_cy) * pt2 / self.cam_fy
+                cloud = np.concatenate((pt0, pt1, pt2), axis=1)
+                if self.sampling == 'FPS':
+                    idxs = self.FPS_point_sampling(cloud, self.num_points)
+                elif self.sampling == 'curvature':
+                    idxs = self.curvature_point_sampling(cloud, self.num_points)
+                choose = np.where(np.logical_and(choose != 0, np.isin(np.arange(len(choose)), idxs, invert=True)), 0, choose)
+                
         else:
             choose = np.pad(choose, (0, self.num_points - len(choose)), 'wrap')
 
@@ -457,6 +478,76 @@ class PoseDataset(Dataset):
         pt1 = (xmap_masked - self.cam_cy) * pt2 / self.cam_fy
         cloud = np.concatenate((pt0, pt1, pt2), axis=1)
         return cloud, choose
+    
+    def curvature_point_sampling(self, cloud, num_keypoints):
+        #Select 3D keypoints based on curvature and spatial distribution.
+        
+        
+        # Estimate normals
+        point_cloud = o3d.geometry.PointCloud()
+        point_cloud.points = o3d.utility.Vector3dVector(cloud)
+        point_cloud.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=30))
+
+        
+            # Compute curvature using eigenvalues of the covariance matrix
+        curvatures = []
+        kdtree = o3d.geometry.KDTreeFlann(point_cloud)
+        points = np.asarray(point_cloud.points)
+
+        for i in range(len(points)):
+            # Find neighbors
+            _, idx, _ = kdtree.search_knn_vector_3d(point_cloud.points[i], 30)  # Use 30 nearest neighbors
+            neighbors = points[idx, :]
+        
+            # Compute covariance matrix
+            covariance = np.cov(neighbors.T)
+        
+            # Compute eigenvalues
+            eigenvalues = np.linalg.eigvalsh(covariance)
+            eigenvalues = np.sort(eigenvalues)  # Ensure eigenvalues are sorted
+        
+            # Curvature is the smallest eigenvalue divided by the sum of all eigenvalues
+            curvature = eigenvalues[0] / (np.sum(eigenvalues) + 1e-6)  # Add small value to avoid division by zero
+            curvatures.append(curvature)
+
+        curvatures = np.array(curvatures)
+        curvatures = (curvatures - np.min(curvatures)) / (np.max(curvatures) - np.min(curvatures))  # Normalize
+
+
+        # Select keypoints based on curvature and spatial distribution
+        keypoints = []
+        for _ in range(num_keypoints):
+            if len(keypoints) == 0:
+                idx = np.argmax(curvatures)  # Start with the point with the highest curvature
+            else:
+                distances = np.linalg.norm(np.asarray(point_cloud.points) - np.asarray(point_cloud.points)[keypoints[-1]], axis=1)
+                weights = curvatures - 0.5 * distances  # Weighted combination of curvature and distance
+                idx = np.argmax(weights)
+            keypoints.append(idx)
+            curvatures[idx] = 0  # Avoid selecting the same point again
+        
+        return np.array(keypoints)
+    
+    def FPS_point_sampling(self, cloud, num_keypoints):
+        # Select keypoints using farthest point sampling
+        if len(cloud) == 0:
+            return np.array([])
+
+        # Convert to numpy array if not already
+        points = np.asarray(cloud)
+        N = points.shape[0]
+        if num_keypoints >= N:
+            return np.arange(N)
+
+        keypoints = [np.random.randint(N)]
+        distances = np.full(N, np.inf)
+        for _ in range(1, num_keypoints):
+            last = points[keypoints[-1]]
+            dist = np.linalg.norm(points - last, axis=1)
+            distances = np.minimum(distances, dist)
+            next_idx = np.argmax(distances)
+            keypoints.append(next_idx)
+        return np.array(keypoints)
 
     def sample_model_points(self, model_points):
         if len(model_points) >= self.num_points:
