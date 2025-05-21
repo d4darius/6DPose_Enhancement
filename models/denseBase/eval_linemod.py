@@ -13,11 +13,12 @@ import torchvision.transforms as transforms
 import torchvision.utils as vutils
 from torch.autograd import Variable
 from dataload.dataloader import PoseDataset as PoseDataset_linemod
-from lib.network import PoseNet, PoseRefineNet
+from lib.network import PoseNet, PoseRefineNet, GNNPoseNet
 from lib.loss import Loss
 from lib.loss_refiner import Loss_refine
 from lib.transformations import euler_matrix, quaternion_matrix, quaternion_from_matrix
 import wandb
+from torch_geometric.data import Batch
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -31,6 +32,18 @@ else:
     cudnn.benchmark = False
     cudnn.deterministic = False
 
+def custom_collate(batch):
+    elem = batch[0]
+    collated = {}
+    for key in elem:
+        if key == 'graph':
+            # batch all graphs in the batch
+            collated[key] = Batch.from_data_list([d[key] for d in batch])
+        else:
+            # use default collate for everything else
+            collated[key] = torch.utils.data.default_collate([d[key] for d in batch])
+    return collated
+
 #--------------------------------------------------------
 # ARGUMENT PARSING: Setup the argument for training
 #--------------------------------------------------------
@@ -42,6 +55,7 @@ parser.add_argument('--model', type=str, default = '',  help='resume PoseNet mod
 parser.add_argument('--refine_model', type=str, default = '',  help='resume PoseRefineNet model')
 parser.add_argument('--refine_start', type=bool, default = False, help='whether to start with refinement')
 parser.add_argument('--num_points', type=int, default = 500, help='number of points to sample')
+parser.add_argument('--gnn', action='store_true', default=False, help='start training on the geometric model')
 
 opt = parser.parse_args()
 
@@ -60,24 +74,34 @@ def main():
     #--------------------------------------------------------
     # MODEL INITIALIZATION: Setup the estimator and refiner models
     #--------------------------------------------------------
-    estimator = PoseNet(num_points = num_points, num_obj = num_objects)
-    estimator.to(device)
-    if not(os.path.exists(opt.model)):
-        print('File not found: {0}'.format(opt.model))
-        exit(0)
-    estimator.load_state_dict(torch.load(opt.model, map_location=torch.device(device)))
-    estimator.eval()
-    if os.path.exists(opt.refine_model):
-        opt.refine = True
-        refiner = PoseRefineNet(num_points = num_points, num_obj = num_objects)
-        refiner.to(device)
-        refiner.load_state_dict(torch.load(opt.refine_model))
-        refiner.eval()
-    else:
+    if opt.gnn:
+        estimator = GNNPoseNet(num_points = num_points, num_obj = num_objects)
+        estimator.to(device)
+        if not(os.path.exists(opt.model)):
+            print('File not found: {0}'.format(opt.model))
+            exit(0)
+        estimator.load_state_dict(torch.load(opt.model, map_location=torch.device(device)))
+        estimator.eval()
         opt.refine = False
+    else:
+        estimator = PoseNet(num_points = num_points, num_obj = num_objects)
+        estimator.to(device)
+        if not(os.path.exists(opt.model)):
+            print('File not found: {0}'.format(opt.model))
+            exit(0)
+        estimator.load_state_dict(torch.load(opt.model, map_location=torch.device(device)))
+        estimator.eval()
+        if os.path.exists(opt.refine_model):
+            opt.refine = True
+            refiner = PoseRefineNet(num_points = num_points, num_obj = num_objects)
+            refiner.to(device)
+            refiner.load_state_dict(torch.load(opt.refine_model))
+            refiner.eval()
+        else:
+            opt.refine = False
 
     testdataset = PoseDataset_linemod(opt.dataset_root, 'eval', num_points=opt.num_points, add_noise=False, noise_trans=0.0, refine=opt.refine_start, device=device)
-    testdataloader = torch.utils.data.DataLoader(testdataset, batch_size=1, shuffle=False, num_workers=opt.workers)
+    testdataloader = torch.utils.data.DataLoader(testdataset, batch_size=1, shuffle=False, num_workers=opt.workers, collate_fn=custom_collate)
 
     sym_list = testdataset.get_sym_list()
     num_points_mesh = testdataset.get_num_points_mesh()
@@ -113,22 +137,27 @@ def main():
         img = data['image']
         target = data['target']
         model_points = data['model_points']
+        graph_data = data['graph']
         idx = data['obj_id']
         if len(points.size()) == 2:
             print('No.{0} NOT Pass! Lost detection!'.format(i))
             fw.write('No.{0} NOT Pass! Lost detection!\n'.format(i))
             continue
-        points, choose, img, target, model_points, idx = Variable(points).to(device), \
-                                                        Variable(choose).to(device), \
-                                                        Variable(img).to(device), \
-                                                        Variable(target).to(device), \
-                                                        Variable(model_points).to(device), \
-                                                        Variable(idx).to(device)
+        points, choose, img, target, model_points, graph_data, idx = points.to(device), \
+                                                                              choose.to(device), \
+                                                                              img.to(device), \
+                                                                              target.to(device), \
+                                                                              model_points.to(device), \
+                                                                              graph_data.to(device), \
+                                                                              idx.to(device)
 
         #--------------------------------------------------------
         # POSE INFERENCE: Estimate the initial pose using PoseNet
         #--------------------------------------------------------
-        pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
+        if opt.gnn:
+            pred_r, pred_t, pred_c, emb = estimator(img, points, choose, graph_data, idx)
+        else:
+            pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
         pred_r = pred_r / torch.norm(pred_r, dim=2).view(1, num_points, 1)
         pred_c = pred_c.view(bs, num_points)
         how_max, which_max = torch.max(pred_c, 1)
