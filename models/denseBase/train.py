@@ -246,7 +246,7 @@ def main():
         test_dis = 0.0
         test_count = 0
         estimator.eval()
-        refiner.eval()
+        #refiner.eval()
 
         with torch.no_grad():
             for j, data in enumerate(testdataloader, 0):

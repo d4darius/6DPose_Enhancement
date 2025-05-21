@@ -232,7 +232,6 @@ class GNNPoseNet(nn.Module):
 
         gnn_fusfeat = self.feat(x, emb, graph_data)
         gnn_fusfeat = gnn_fusfeat.view(bs, self.num_points, 768).permute(0, 2, 1).contiguous()  # (bs, 768, num_points)
-        print('gnn_fusfeat', gnn_fusfeat.size())
 
         rx = F.relu(self.conv1_r(gnn_fusfeat))
         tx = F.relu(self.conv1_t(gnn_fusfeat))
