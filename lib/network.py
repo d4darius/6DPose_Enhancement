@@ -16,7 +16,7 @@ import pdb
 import torch.nn.functional as F
 from lib.pspnet import PSPNet
 from torch_geometric.data import Data
-from torch_geometric.nn import GCNConv
+from torch_geometric.nn import GCNConv, GINConv
 
 psp_models = {
     'resnet18': lambda: PSPNet(sizes=(1, 2, 3, 6), psp_size=512, deep_features_size=256, backend='resnet18'),
@@ -167,8 +167,20 @@ class GNNFeat(nn.Module):
         self.g_conv1 = torch.nn.Conv1d(3, 64, 1)
         self.c_conv1 = torch.nn.Conv1d(32, 64, 1)
 
-        self.gnn_conv1 = GCNConv(128, 256)
-        self.gnn_conv2 = GCNConv(256, 512)
+        #self.gnn_conv1 = GCNConv(128, 256)
+        self.mlp1 = nn.Sequential(
+            nn.Linear(128, 256),
+            nn.ReLU(),
+            nn.Linear(256, 256)
+        )
+        self.gnn_conv1 = GINConv(self.mlp1)
+        #self.gnn_conv2 = GCNConv(256, 512)
+        self.mlp2 = nn.Sequential(
+            nn.Linear(256, 256),
+            nn.ReLU(),
+            nn.Linear(256, 512)
+        )
+        self.gnn_conv2 = GINConv(self.mlp2)
 
     def forward(self, x, emb, graph_data):
         # We apply pointnet
