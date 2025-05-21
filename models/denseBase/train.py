@@ -229,7 +229,6 @@ def main():
                             torch.save(estimator.state_dict(), '{0}/gnn_pose_model_current.pth'.format(opt.outf))
                         else:
                             torch.save(estimator.state_dict(), '{0}/pose_model_current.pth'.format(opt.outf))
-                logger.info('Finish train time {0}'.format(time.strftime("%Hh %Mm %Ss")))
 
         if opt.refine_start:
             torch.save(refiner.state_dict(), '{0}/pose_refine_model_current.pth'.format(opt.outf))
