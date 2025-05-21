@@ -436,48 +436,77 @@ class PoseDataset(Dataset):
 
         return rmin, rmax, cmin, cmax
     
-    def sample_points(self, depth, rmin, rmax, cmin, cmax, mask):
-        choose = mask[rmin:rmax, cmin:cmax].flatten().nonzero()[0]
-        if len(choose) == 0:
-            choose = np.zeros(self.num_points, dtype=np.int32)
-        elif len(choose) > self.num_points:
+    def sample_points(self, depth_crop, rmin, rmax, cmin, cmax, mask_full):
+        # depth_crop is the depth image already cropped to the bounding box [rmin:rmax, cmin:cmax]
+        # mask_full is the boolean mask for the entire image (e.g., mask_label * mask_depth)
+
+        # 1. Get the mask for the cropped region
+        mask_cropped = mask_full[rmin:rmax, cmin:cmax]
+        
+        # 2. Get indices of valid points within the flattened cropped mask
+        # These indices are relative to the flattened mask_cropped / depth_crop
+        initial_choose = mask_cropped.flatten().nonzero()[0]
+        num_available_points = len(initial_choose)
+
+        final_choose_indices = None # This will store the self.num_points indices
+
+        if num_available_points == 0:
+            # No points in the mask, final_choose_indices will be all zeros.
+            # These indices will be applied to flattened depth_crop, xmap_crop, ymap_crop.
+            final_choose_indices = np.zeros(self.num_points, dtype=np.int32)
+        
+        elif num_available_points > self.num_points:
             if self.sampling == 'random':
-                choose = np.random.choice(choose, self.num_points, replace=False)
+                # Randomly select self.num_points indices from the indices of available points
+                idx_into_initial_choose = np.random.choice(num_available_points, self.num_points, replace=False)
+                final_choose_indices = initial_choose[idx_into_initial_choose]
+            
             elif self.sampling == 'FPS' or self.sampling == 'curvature':
-                depth_masked = depth.flatten()[choose][:, np.newaxis]
-                # Slice from precomputed maps
-                xmap_crop = self.xmap_full[rmin:rmax, cmin:cmax]
-                ymap_crop = self.ymap_full[rmin:rmax, cmin:cmax]
+                # Build a temporary cloud from all available points in initial_choose
+                # to perform FPS or curvature sampling on.
+                xmap_for_crop_sampling = self.xmap_full[rmin:rmax, cmin:cmax]
+                ymap_for_crop_sampling = self.ymap_full[rmin:rmax, cmin:cmax]
 
-                xmap_masked = xmap_crop.flatten()[choose][:, np.newaxis]
-                ymap_masked = ymap_crop.flatten()[choose][:, np.newaxis]
+                depth_values_for_sampling = depth_crop.flatten()[initial_choose][:, np.newaxis]
+                xmap_values_for_sampling = xmap_for_crop_sampling.flatten()[initial_choose][:, np.newaxis]
+                ymap_values_for_sampling = ymap_for_crop_sampling.flatten()[initial_choose][:, np.newaxis]
 
-                pt2 = depth_masked / 1000.0
-                pt0 = (ymap_masked - self.cam_cx) * pt2 / self.cam_fx
-                pt1 = (xmap_masked - self.cam_cy) * pt2 / self.cam_fy
-                cloud = np.concatenate((pt0, pt1, pt2), axis=1)
-                if self.sampling == 'FPS':
-                    idxs = self.FPS_point_sampling(cloud, self.num_points)
-                elif self.sampling == 'curvature':
-                    idxs = self.curvature_point_sampling(cloud, self.num_points)
-                choose = np.where(np.logical_and(choose != 0, np.isin(np.arange(len(choose)), idxs, invert=True)), 0, choose)
+                pt2_sampling = depth_values_for_sampling / 1000.0
+                pt0_sampling = (ymap_values_for_sampling - self.cam_cx) * pt2_sampling / self.cam_fx
+                pt1_sampling = (xmap_values_for_sampling - self.cam_cy) * pt2_sampling / self.cam_fy
+                cloud_for_sampling = np.concatenate((pt0_sampling, pt1_sampling, pt2_sampling), axis=1)
                 
-        else:
-            choose = np.pad(choose, (0, self.num_points - len(choose)), 'wrap')
+                # Sample self.num_points from this cloud_for_sampling.
+                # The returned indices (selected_sub_indices) are indices into cloud_for_sampling,
+                # and therefore also indices into the initial_choose array.
+                if self.sampling == 'FPS':
+                    selected_sub_indices = self.FPS_point_sampling(cloud_for_sampling, self.num_points)
+                else: # curvature
+                    selected_sub_indices = self.curvature_point_sampling(cloud_for_sampling, self.num_points)
+                
+                # The final chosen indices are the original mask indices corresponding to these sampled points
+                final_choose_indices = initial_choose[selected_sub_indices]
+        
+        else: # 0 < num_available_points <= self.num_points
+            # Not enough points, pad with existing points (wrap around)
+            final_choose_indices = np.pad(initial_choose, (0, self.num_points - num_available_points), 'wrap')
 
-        depth_masked = depth.flatten()[choose][:, np.newaxis]
-        # Slice from precomputed maps
-        xmap_crop = self.xmap_full[rmin:rmax, cmin:cmax]
-        ymap_crop = self.ymap_full[rmin:rmax, cmin:cmax]
+        # Now, construct the final cloud using final_choose_indices.
+        # These indices are relative to the flattened cropped region (depth_crop, xmap_at_crop, ymap_at_crop).
+        
+        xmap_at_crop = self.xmap_full[rmin:rmax, cmin:cmax]
+        ymap_at_crop = self.ymap_full[rmin:rmax, cmin:cmax]
 
-        xmap_masked = xmap_crop.flatten()[choose][:, np.newaxis]
-        ymap_masked = ymap_crop.flatten()[choose][:, np.newaxis]
+        depth_masked = depth_crop.flatten()[final_choose_indices][:, np.newaxis]
+        xmap_masked = xmap_at_crop.flatten()[final_choose_indices][:, np.newaxis]
+        ymap_masked = ymap_at_crop.flatten()[final_choose_indices][:, np.newaxis]
 
         pt2 = depth_masked / 1000.0
-        pt0 = (ymap_masked - self.cam_cx) * pt2 / self.cam_fx
-        pt1 = (xmap_masked - self.cam_cy) * pt2 / self.cam_fy
-        cloud = np.concatenate((pt0, pt1, pt2), axis=1)
-        return cloud, choose
+        pt0 = (ymap_masked - self.cam_cx) * pt2 / self.cam_fx # X coordinate in camera frame
+        pt1 = (xmap_masked - self.cam_cy) * pt2 / self.cam_fy # Y coordinate in camera frame
+        final_cloud = np.concatenate((pt0, pt1, pt2), axis=1)
+        
+        return final_cloud, final_choose_indices
     
     def curvature_point_sampling(self, cloud, num_keypoints):
         #Select 3D keypoints based on curvature and spatial distribution.
