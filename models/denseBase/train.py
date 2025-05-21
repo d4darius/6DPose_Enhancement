@@ -109,7 +109,7 @@ def main():
         opt.decay_start = True
         opt.lr *= opt.lr_rate
         opt.w *= opt.w_rate
-        opt.batch_size = int(opt.batch_size / opt.iteration)
+        #opt.batch_size = int(opt.batch_size / opt.iteration)
         optimizer = optim.Adam(refiner.parameters(), lr=opt.lr)
     else:
         opt.refine_start = False
@@ -161,7 +161,7 @@ def main():
 
         for rep in range(opt.repeat_epoch):
             for i, data in enumerate(dataloader, 0):
-                if len(data) == 1:
+                if 'error' in data:
                     print(data['error'])
                     continue
                 points = data['cloud']
@@ -232,6 +232,9 @@ def main():
 
         with torch.no_grad():
             for j, data in enumerate(testdataloader, 0):
+                if 'error' in data:
+                    print(data['error'])
+                    continue
                 points = data['cloud']
                 choose = data['choose']
                 img = data['image']
@@ -259,7 +262,7 @@ def main():
                     "test_batch": test_count,
                     "test_distance": dis.item(),
                 })
-                logger.info('Test time {0} Test Frame No.{1} dis:{2}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), test_count, dis))
+                logger.info('Test time {0} Test Frame No.{1} dis:{2}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), int(test_count*idx.size()[0]), dis))
 
                 test_count += 1
 
@@ -287,15 +290,14 @@ def main():
         #--------------------------------------------------------
         if best_test < opt.refine_margin and not opt.refine_start:
             opt.refine_start = True
-            opt.batch_size = int(opt.batch_size / opt.iteration)
             optimizer = optim.Adam(refiner.parameters(), lr=opt.lr)
 
             if opt.dataset == 'linemod':
-                dataset = PoseDataset_linemod(opt.dataset_root, 'train', num_points=opt.num_points, add_noise=True, refine=opt.refine_start)
-            dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True, num_workers=opt.workers)
+                dataset = PoseDataset_linemod(opt.dataset_root, 'train', num_points=opt.num_points, add_noise=True, refine=opt.refine_start, device=device)
+            dataloader = torch.utils.data.DataLoader(dataset, batch_size=opt.batch_size, shuffle=True, num_workers=opt.workers, pin_memory=True, collate_fn=dataset.center_pad_collate)
             if opt.dataset == 'linemod':
-                test_dataset = PoseDataset_linemod(opt.dataset_root, 'test', num_points=opt.num_points, add_noise=False, noise_trans=0.0, refine=opt.refine_start)
-            testdataloader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=opt.workers)
+                test_dataset = PoseDataset_linemod(opt.dataset_root, 'test', num_points=opt.num_points, add_noise=False, noise_trans=0.0, refine=opt.refine_start, device=device)
+            testdataloader = torch.utils.data.DataLoader(test_dataset, batch_size=opt.batch_size, shuffle=False, num_workers=opt.workers, pin_memory=True, collate_fn=dataset.center_pad_collate)
             
             opt.sym_list = dataset.get_sym_list()
             opt.num_points_mesh = dataset.get_num_points_mesh()

@@ -172,7 +172,15 @@ class PoseDataset(Dataset):
         # LOADING PATHS (only for non-YAML data now)
         img_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"rgb/{sample_id:04d}.png")
         depth_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"depth/{sample_id:04d}.png")
-        # pose_path and bbx_path are no longer needed here directly for file opening
+        
+        if not os.path.exists(img_path):
+                return {
+                    "error": f"Mask file not found: {img_path}"
+                }
+        if not os.path.exists(depth_path):
+                return {
+                    "error": f"Mask file not found: {depth_path}"
+                }
 
         # DATA
         img = self.load_image(img_path)
