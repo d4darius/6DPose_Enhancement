@@ -18,6 +18,7 @@ from torch_geometric.transforms import KNNGraph
 import networkx as nx
 import matplotlib.pyplot as plt
 from torch_geometric.utils import to_networkx
+from torch_geometric.data import Batch
 
 def unnormalize(tensor, mean, std):
     mean = torch.tensor(mean).view(3, 1, 1)
@@ -481,8 +482,10 @@ class PoseDataset(Dataset):
                 # and therefore also indices into the initial_choose array.
                 if self.sampling == 'FPS':
                     selected_sub_indices = self.FPS_point_sampling(cloud_for_sampling, self.num_points)
-                else: # curvature
+                elif self.sampling == 'curvature':
                     selected_sub_indices = self.curvature_point_sampling(cloud_for_sampling, self.num_points)
+                else:
+                    return None # Invalid sampling method
                 
                 # The final chosen indices are the original mask indices corresponding to these sampled points
                 final_choose_indices = initial_choose[selected_sub_indices]
@@ -669,6 +672,9 @@ class PoseDataset(Dataset):
             except:
                 # Keep as list if can't be stacked
                 pass
+        
+        # same for graph
+        batch_dict['graph'] = Batch.from_data_list([d['graph'] for d in batch])
         
         # Add padding information for debugging/verification
         batch_dict['pad_info'] = pad_info

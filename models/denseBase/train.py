@@ -54,7 +54,7 @@ parser.add_argument('--lr_rate', default=0.3, help='learning rate decay rate')
 parser.add_argument('--w', default=0.015, help='learning rate')
 parser.add_argument('--w_rate', default=0.3, help='learning rate decay rate')
 parser.add_argument('--decay_margin', default=0.016, help='margin to decay lr & w')
-parser.add_argument('--refine_margin', default=0.013, help='margin to start the training of iterative refinement')
+parser.add_argument('--refine_margin', default=0.009, help='margin to start the training of iterative refinement')
 parser.add_argument('--noise_trans', default=0.03, help='range of the random noise of translation added to the training data')
 parser.add_argument('--iteration', type=int, default = 2, help='number of refinement iterations')
 parser.add_argument('--nepoch', type=int, default=500, help='max number of epochs to train')
@@ -121,7 +121,7 @@ def main():
             opt.decay_start = True
             opt.lr *= opt.lr_rate
             opt.w *= opt.w_rate
-            opt.batch_size = int(opt.batch_size / opt.iteration)
+            #opt.batch_size = int(opt.batch_size / opt.iteration)
             optimizer = optim.Adam(refiner.parameters(), lr=opt.lr)
         else:
             opt.refine_start = False
@@ -132,10 +132,10 @@ def main():
     # DATASET LOADING: Setup the dataloader and dataset
     #--------------------------------------------------------
     if opt.dataset == 'linemod':
-        dataset = PoseDataset_linemod(opt.dataset_root, 'train', num_points=opt.num_points, add_noise=True, refine=opt.refine_start, device=device, sampling='FPS')
+        dataset = PoseDataset_linemod(opt.dataset_root, 'train', num_points=opt.num_points, add_noise=True, refine=opt.refine_start, device=device, sampling='curvature')
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=opt.batch_size, shuffle=True, num_workers=opt.workers, pin_memory=True, collate_fn=dataset.center_pad_collate)
     if opt.dataset == 'linemod':
-        test_dataset = PoseDataset_linemod(opt.dataset_root, 'test', num_points=opt.num_points, add_noise=False, noise_trans=0.0, refine=opt.refine_start, device=device, sampling='FPS')
+        test_dataset = PoseDataset_linemod(opt.dataset_root, 'eval', num_points=opt.num_points, add_noise=False, noise_trans=0.0, refine=opt.refine_start, device=device, sampling='curvature')
     testdataloader = torch.utils.data.DataLoader(test_dataset, batch_size=opt.batch_size, shuffle=False, num_workers=opt.workers, pin_memory=True, collate_fn=dataset.center_pad_collate)
     
     opt.sym_list = dataset.get_sym_list()
@@ -163,6 +163,7 @@ def main():
         logger = setup_logger('epoch%d' % epoch, os.path.join(opt.log_dir, 'epoch_%d_log.txt' % epoch))
         logger.info('Train time {0}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)) + ', ' + 'Training started'))
         train_count = 0
+        train_frame = 0
         train_dis_avg = 0.0
         if opt.refine_start:
             estimator.eval()
@@ -214,9 +215,9 @@ def main():
 
                 train_dis_avg += dis.item()
                 train_count += 1
+                train_frame += idx.size()[0]
 
-                #if train_count % opt.batch_size == 0:
-                logger.info('Train time {0} Epoch {1} Batch {2} Frame {3} Avg_dis:{4}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), epoch, train_count, int(train_count*idx.size()[0]), train_dis_avg))
+                logger.info('Train time {0} Epoch {1} Batch {2} Frame {3} Avg_dis:{4} {5}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), epoch, train_count, train_frame, train_dis_avg), 'refine' if opt.refine_start else '')
                 optimizer.step()
                 optimizer.zero_grad()
                 train_dis_avg = 0

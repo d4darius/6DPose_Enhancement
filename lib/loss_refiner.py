@@ -81,7 +81,7 @@ def loss_calculation(pred_r, pred_t, target, model_points, idx, points, num_poin
         
         # Get translation and rotation for this batch
         b_t = ori_t[b_flat_idx]
-        b_ori_base = ori_base[b_flat_idx]
+        b_ori_base = ori_base[b_flat_idx].unsqueeze(0)  # Add unsqueeze to make it [1, 3, 3]
         
         # Transform points for this batch
         b_points = points[b].unsqueeze(0)  # [1, num_input_points, 3]
@@ -102,7 +102,9 @@ def loss_calculation(pred_r, pred_t, target, model_points, idx, points, num_poin
     # Get per-batch metrics
     batch_dis = dis.squeeze(1)  # [bs]
     
-    return batch_dis, new_points.detach(), new_target.detach()
+    loss = torch.mean(batch_dis)
+    
+    return loss, new_points.detach(), new_target.detach()
 
 
 class Loss_refine(_Loss):

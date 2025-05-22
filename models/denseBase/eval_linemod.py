@@ -68,7 +68,7 @@ def main():
     #--------------------------------------------------------
     # DATASET INITIALIZATION: Setup the dataset
     #--------------------------------------------------------
-    dataset_config_dir = '../dataset/linemod/DenseFusion/Linemod_Preprocessed/models'
+    dataset_config_dir = '../dataset/linemod/DenseFusion/Linemod_preprocessed/models'
     output_result_dir = 'experiments/eval_result/linemod'
 
     #--------------------------------------------------------
