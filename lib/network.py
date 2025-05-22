@@ -192,7 +192,7 @@ class GNNFeat(nn.Module):
         self.mlp4 = nn.Sequential(
             nn.Linear(1024, 1024),
             nn.ReLU(),
-            nn.Linear(1024, 512)
+            nn.Linear(1024, 2048)
         )
         self.gnn_conv4 = GINConv(self.mlp4)
 
@@ -212,7 +212,7 @@ class GNNFeat(nn.Module):
         feat_3 = F.relu(self.gnn_conv3(feat_2, edge_index))
         feat_4 = self.gnn_conv4(feat_3, edge_index)
         
-        return torch.cat([feat_1, feat_2, feat_4], dim=1) # (bs, 256+512+512, 500)
+        return torch.cat([feat_1, feat_2, feat_4], dim=1) # (bs, 256+512+2048, 500)
 
 class GNNPoseNet(nn.Module):
     def __init__(self, num_points, num_obj):
@@ -220,21 +220,21 @@ class GNNPoseNet(nn.Module):
         self.cnn = ModifiedResnet()
         self.feat = GNNFeat()
         
-        self.conv1_r = torch.nn.Conv1d(1280, 640, 1)
-        self.conv1_t = torch.nn.Conv1d(1280, 640, 1)
-        self.conv1_c = torch.nn.Conv1d(1280, 640, 1)
+        self.conv1_r = torch.nn.Conv1d(2816, 1408, 1)
+        self.conv1_t = torch.nn.Conv1d(2816, 1408, 1)
+        self.conv1_c = torch.nn.Conv1d(2816, 1408, 1)
 
-        self.conv2_r = torch.nn.Conv1d(640, 320, 1)
-        self.conv2_t = torch.nn.Conv1d(640, 320, 1)
-        self.conv2_c = torch.nn.Conv1d(640, 320, 1)
+        self.conv2_r = torch.nn.Conv1d(1408, 704, 1)
+        self.conv2_t = torch.nn.Conv1d(1408, 704, 1)
+        self.conv2_c = torch.nn.Conv1d(1408, 704, 1)
 
-        self.conv3_r = torch.nn.Conv1d(320, 160, 1)
-        self.conv3_t = torch.nn.Conv1d(320, 160, 1)
-        self.conv3_c = torch.nn.Conv1d(320, 160, 1)
+        self.conv3_r = torch.nn.Conv1d(704, 352, 1)
+        self.conv3_t = torch.nn.Conv1d(704, 352, 1)
+        self.conv3_c = torch.nn.Conv1d(704, 352, 1)
 
-        self.conv4_r = torch.nn.Conv1d(160, num_obj*4, 1) #quaternion
-        self.conv4_t = torch.nn.Conv1d(160, num_obj*3, 1) #translation
-        self.conv4_c = torch.nn.Conv1d(160, num_obj*1, 1) #confidence
+        self.conv4_r = torch.nn.Conv1d(352, num_obj*4, 1) #quaternion
+        self.conv4_t = torch.nn.Conv1d(352, num_obj*3, 1) #translation
+        self.conv4_c = torch.nn.Conv1d(352, num_obj*1, 1) #confidence
 
         self.num_points = num_points
         self.num_obj = num_obj
@@ -251,7 +251,7 @@ class GNNPoseNet(nn.Module):
         x = x.transpose(2, 1).contiguous()
 
         gnn_fusfeat = self.feat(x, emb, graph_data)
-        gnn_fusfeat = gnn_fusfeat.view(bs, self.num_points, 1280).permute(0, 2, 1).contiguous()  # (bs, 768, num_points)
+        gnn_fusfeat = gnn_fusfeat.view(bs, self.num_points, 2816).permute(0, 2, 1).contiguous()  # (bs, 768, num_points)
 
         rx = F.relu(self.conv1_r(gnn_fusfeat))
         tx = F.relu(self.conv1_t(gnn_fusfeat))
