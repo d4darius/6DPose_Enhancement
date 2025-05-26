@@ -101,7 +101,7 @@ def main():
             opt.refine = False
 
     testdataset = PoseDataset_linemod(opt.dataset_root, 'eval', num_points=opt.num_points, add_noise=False, noise_trans=0.0, refine=opt.refine_start, device=device)
-    testdataloader = torch.utils.data.DataLoader(testdataset, batch_size=1, shuffle=False, num_workers=opt.workers, collate_fn=custom_collate)
+    testdataloader = torch.utils.data.DataLoader(testdataset, batch_size=1, shuffle=False, num_workers=opt.workers, collate_fn=testdataset.center_pad_collate)
 
     sym_list = testdataset.get_sym_list()
     num_points_mesh = testdataset.get_num_points_mesh()
@@ -137,18 +137,18 @@ def main():
         img = data['image']
         target = data['target']
         model_points = data['model_points']
-        graph_data = data['graph']
+        if opt.gnn:
+            graph_data = data['graph'][0].to(device)
         idx = data['obj_id']
         if len(points.size()) == 2:
             print('No.{0} NOT Pass! Lost detection!'.format(i))
             fw.write('No.{0} NOT Pass! Lost detection!\n'.format(i))
             continue
-        points, choose, img, target, model_points, graph_data, idx = points.to(device), \
+        points, choose, img, target, model_points, idx = points.to(device), \
                                                                               choose.to(device), \
                                                                               img.to(device), \
                                                                               target.to(device), \
                                                                               model_points.to(device), \
-                                                                              graph_data.to(device), \
                                                                               idx.to(device)
 
         #--------------------------------------------------------
