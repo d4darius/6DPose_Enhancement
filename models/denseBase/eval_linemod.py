@@ -256,8 +256,8 @@ def main():
     for i in range(num_objects):
         if num_count[i] > 0:
             mean_distance = total_distances[i] / num_count[i]
-            print('Object {0} success rate: {1}, mean distance: {2}'.format(objlist[i], float(success_count[i]) / num_count[i], mean_distance))
-            fw.write('Object {0} success rate: {1}, mean distance: {2}\n'.format(objlist[i], float(success_count[i]) / num_count[i], mean_distance))
+            print('Object {0} success rate: {1:.4f}, mean distance: {2:.4f}, diameter: {3:.4f}'.format(objlist[i], float(success_count[i]) / num_count[i], mean_distance, diameter[i]))
+            fw.write('Object {0} success rate: {1:.4f}, mean distance: {2:.4f}, diameter: {3:.4f}\n'.format(objlist[i], float(success_count[i]) / num_count[i], mean_distance, diameter[i]))
     
     # Overall success rate
     print('ALL success rate: {0}'.format(float(sum(success_count)) / sum(num_count)))
