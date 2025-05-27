@@ -32,18 +32,6 @@ else:
     cudnn.benchmark = False
     cudnn.deterministic = False
 
-def custom_collate(batch):
-    elem = batch[0]
-    collated = {}
-    for key in elem:
-        if key == 'graph':
-            # batch all graphs in the batch
-            collated[key] = Batch.from_data_list([d[key] for d in batch])
-        else:
-            # use default collate for everything else
-            collated[key] = torch.utils.data.default_collate([d[key] for d in batch])
-    return collated
-
 #--------------------------------------------------------
 # ARGUMENT PARSING: Setup the argument for training
 #--------------------------------------------------------
@@ -56,6 +44,8 @@ parser.add_argument('--refine_model', type=str, default = '',  help='resume Pose
 parser.add_argument('--refine_start', type=bool, default = False, help='whether to start with refinement')
 parser.add_argument('--num_points', type=int, default = 500, help='number of points to sample')
 parser.add_argument('--gnn', action='store_true', default=False, help='start training on the geometric model')
+parser.add_argument('--batch_size', type=int, default=1, help='batch size for evaluation')
+parser.add_argument('--no_cuda', action='store_true', default=False, help='disable CUDA (use CPU only)')
 
 opt = parser.parse_args()
 
@@ -64,6 +54,11 @@ def main():
     objlist = [1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15]
     num_points = 500
     iteration = 4
+    
+    # Force CPU if requested
+    use_cuda = torch.cuda.is_available() and not opt.no_cuda
+    device_str = "cuda" if use_cuda else "cpu"
+    print(f"Using device: {device_str}")
     
     #--------------------------------------------------------
     # DATASET INITIALIZATION: Setup the dataset
@@ -101,10 +96,23 @@ def main():
             opt.refine = False
 
     testdataset = PoseDataset_linemod(opt.dataset_root, 'eval', num_points=opt.num_points, add_noise=False, noise_trans=0.0, refine=opt.refine_start)
-    testdataloader = torch.utils.data.DataLoader(testdataset, batch_size=32, shuffle=False, num_workers=opt.workers, collate_fn=custom_collate)
+    
+    # Use a safer DataLoader configuration to prevent segmentation faults
+    # Use fewer workers and set persistent_workers=True for stability
+    worker_count = 0 if opt.batch_size == 1 else min(opt.workers, 4)
+    testdataloader = torch.utils.data.DataLoader(
+        testdataset, 
+        batch_size=opt.batch_size,
+        shuffle=False, 
+        num_workers=worker_count,
+        persistent_workers=worker_count > 0,
+        pin_memory=use_cuda,
+        collate_fn=testdataset.center_pad_collate
+    )
     
     # Use actual batch size from dataloader
     bs = testdataloader.batch_size
+    print(f"Evaluating with batch size: {bs}")
     
     sym_list = testdataset.get_sym_list()
     num_points_mesh = testdataset.get_num_points_mesh()
