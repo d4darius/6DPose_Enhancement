@@ -31,6 +31,7 @@ parser.add_argument('--refine_model', type=str, default='', help='PoseRefineNet 
 parser.add_argument('--output_dir', type=str, default='plots/eval_linemod', help='Output directory for images')
 parser.add_argument('--num_points', type=int, default=500, help='number of points to sample')
 parser.add_argument('--img_size', type=int, default=480, help='image size for plotting')
+parser.add_argument('--gnn', action='store_true', default=False, help='start training on the geometric model')
 opt = parser.parse_args()
 
 def main():
@@ -82,11 +83,16 @@ def main():
         points = data['cloud'].unsqueeze(0).to(device)
         choose = data['choose'].unsqueeze(0).to(device)
         img = data['image'].unsqueeze(0).to(device)
+        if opt.gnn:
+            graph_data = data['graph'].unsqueeze(0).to(device)
         model_points = data['model_points'].unsqueeze(0).to(device)
         obj_idx = torch.tensor([obj_id-1], dtype=torch.long).to(device)  # assuming obj_id starts from 1
 
         # Run PoseNet
-        pred_r, pred_t, pred_c, emb = estimator(img, points, choose, torch.tensor([obj_id], dtype=torch.long).to(device))
+        if opt.gnn:
+            pred_r, pred_t, pred_c, emb = estimator(img, points, choose, torch.tensor([obj_id], dtype=torch.long).to(device))
+        else:
+            pred_r, pred_t, pred_c, emb = estimator(img, points, choose, graph_data, torch.tensor([obj_id], dtype=torch.long).to(device))
         pred_r = pred_r / torch.norm(pred_r, dim=2).view(1, num_points, 1)
         pred_c = pred_c.view(bs, num_points)
         _, which_max = torch.max(pred_c, 1)
