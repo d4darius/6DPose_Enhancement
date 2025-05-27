@@ -64,7 +64,7 @@ def main():
     objlist = [1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15]
     num_points = 500
     iteration = 4
-    bs = 1
+    
     #--------------------------------------------------------
     # DATASET INITIALIZATION: Setup the dataset
     #--------------------------------------------------------
@@ -100,9 +100,12 @@ def main():
         else:
             opt.refine = False
 
-    testdataset = PoseDataset_linemod(opt.dataset_root, 'eval', num_points=opt.num_points, add_noise=False, noise_trans=0.0, refine=opt.refine_start, device=device)
-    testdataloader = torch.utils.data.DataLoader(testdataset, batch_size=1, shuffle=False, num_workers=opt.workers, collate_fn=custom_collate)
-
+    testdataset = PoseDataset_linemod(opt.dataset_root, 'eval', num_points=opt.num_points, add_noise=False, noise_trans=0.0, refine=opt.refine_start)
+    testdataloader = torch.utils.data.DataLoader(testdataset, batch_size=32, shuffle=False, num_workers=opt.workers, collate_fn=custom_collate)
+    
+    # Use actual batch size from dataloader
+    bs = testdataloader.batch_size
+    
     sym_list = testdataset.get_sym_list()
     num_points_mesh = testdataset.get_num_points_mesh()
     criterion = Loss(num_points_mesh, sym_list)
@@ -123,6 +126,8 @@ def main():
 
     success_count = [0 for i in range(num_objects)]
     num_count = [0 for i in range(num_objects)]
+    # Add tracking for total distances per object
+    total_distances = [0.0 for i in range(num_objects)]
     fw = open('{0}/eval_result_logs.txt'.format(output_result_dir), 'w')
 
     #--------------------------------------------------------
@@ -151,6 +156,9 @@ def main():
                                                                               graph_data.to(device), \
                                                                               idx.to(device)
 
+        # Get the actual batch size from the data
+        batch_size = img.size(0)
+        
         #--------------------------------------------------------
         # POSE INFERENCE: Estimate the initial pose using PoseNet
         #--------------------------------------------------------
@@ -158,83 +166,103 @@ def main():
             pred_r, pred_t, pred_c, emb = estimator(img, points, choose, graph_data, idx)
         else:
             pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
-        pred_r = pred_r / torch.norm(pred_r, dim=2).view(1, num_points, 1)
-        pred_c = pred_c.view(bs, num_points)
-        how_max, which_max = torch.max(pred_c, 1)
-        pred_t = pred_t.view(bs * num_points, 1, 3)
+        pred_r = pred_r / torch.norm(pred_r, dim=2).view(batch_size, num_points, 1)
+        pred_c = pred_c.view(batch_size, num_points)
+        
+        # Process each item in the batch
+        for b in range(batch_size):
+            how_max, which_max = torch.max(pred_c[b], 0)
+            pred_t_b = pred_t.view(batch_size * num_points, 1, 3)
+            which_idx = b * num_points + which_max
+            
+            my_r = pred_r[b][which_max].view(-1).cpu().data.numpy()
+            my_t = (points[b].view(1, num_points, 1, 3) + pred_t_b[which_idx].view(1, 1, 1, 3)).view(-1).cpu().data.numpy()
+            my_pred = np.append(my_r, my_t)
 
-        my_r = pred_r[0][which_max[0]].view(-1).cpu().data.numpy()
-        my_t = (points.view(bs * num_points, 1, 3) + pred_t)[which_max[0]].view(-1).cpu().data.numpy()
-        my_pred = np.append(my_r, my_t)
+            #--------------------------------------------------------
+            # REFINEMENT LOOP: Refine the pose using PoseRefineNet
+            #--------------------------------------------------------
+            if opt.refine:
+                for ite in range(0, iteration):
+                    T = Variable(torch.from_numpy(my_t.astype(np.float32))).to(device).view(1, 3).repeat(num_points, 1).contiguous().view(1, num_points, 3)
+                    my_mat = quaternion_matrix(my_r)
+                    R = Variable(torch.from_numpy(my_mat[:3, :3].astype(np.float32))).to(device).view(1, 3, 3)
+                    my_mat[0:3, 3] = my_t
+                    
+                    new_points = torch.bmm((points[b].view(1, num_points, 3) - T), R).contiguous()
+                    pred_r, pred_t = refiner(new_points, emb[b:b+1], idx[b:b+1])
+                    pred_r = pred_r.view(1, 1, -1)
+                    pred_r = pred_r / (torch.norm(pred_r, dim=2).view(1, 1, 1))
+                    my_r_2 = pred_r.view(-1).cpu().data.numpy()
+                    my_t_2 = pred_t.view(-1).cpu().data.numpy()
+                    my_mat_2 = quaternion_matrix(my_r_2)
+                    my_mat_2[0:3, 3] = my_t_2
 
-        #--------------------------------------------------------
-        # REFINEMENT LOOP: Refine the pose using PoseRefineNet
-        #--------------------------------------------------------
-        if opt.refine:
-            for ite in range(0, iteration):
-                T = Variable(torch.from_numpy(my_t.astype(np.float32))).to(device).view(1, 3).repeat(num_points, 1).contiguous().view(1, num_points, 3)
-                my_mat = quaternion_matrix(my_r)
-                R = Variable(torch.from_numpy(my_mat[:3, :3].astype(np.float32))).to(device).view(1, 3, 3)
-                my_mat[0:3, 3] = my_t
-                
-                new_points = torch.bmm((points - T), R).contiguous()
-                pred_r, pred_t = refiner(new_points, emb, idx)
-                pred_r = pred_r.view(1, 1, -1)
-                pred_r = pred_r / (torch.norm(pred_r, dim=2).view(1, 1, 1))
-                my_r_2 = pred_r.view(-1).cpu().data.numpy()
-                my_t_2 = pred_t.view(-1).cpu().data.numpy()
-                my_mat_2 = quaternion_matrix(my_r_2)
-                my_mat_2[0:3, 3] = my_t_2
+                    my_mat_final = np.dot(my_mat, my_mat_2)
+                    my_r_final = copy.deepcopy(my_mat_final)
+                    my_r_final[0:3, 3] = 0
+                    my_r_final = quaternion_from_matrix(my_r_final, True)
+                    my_t_final = np.array([my_mat_final[0][3], my_mat_final[1][3], my_mat_final[2][3]])
 
-                my_mat_final = np.dot(my_mat, my_mat_2)
-                my_r_final = copy.deepcopy(my_mat_final)
-                my_r_final[0:3, 3] = 0
-                my_r_final = quaternion_from_matrix(my_r_final, True)
-                my_t_final = np.array([my_mat_final[0][3], my_mat_final[1][3], my_mat_final[2][3]])
+                    my_pred = np.append(my_r_final, my_t_final)
+                    my_r = my_r_final
+                    my_t = my_t_final
 
-                my_pred = np.append(my_r_final, my_t_final)
-                my_r = my_r_final
-                my_t = my_t_final
+            # Here 'my_pred' is the final pose estimation result after refinement ('my_r': quaternion, 'my_t': translation)
 
-        # Here 'my_pred' is the final pose estimation result after refinement ('my_r': quaternion, 'my_t': translation)
+            #--------------------------------------------------------
+            # RESULTS: Evaluate the pose estimation result for each object
+            #--------------------------------------------------------
+            model_points_b = model_points[b].cpu().detach().numpy()
+            my_r_matrix = quaternion_matrix(my_r)[:3, :3]
+            pred = np.dot(model_points_b, my_r_matrix.T) + my_t
+            target_b = target[b].cpu().detach().numpy()
 
-        #--------------------------------------------------------
-        # RESULTS: Evaluate the pose estimation result for each object
-        #--------------------------------------------------------
-        model_points = model_points[0].cpu().detach().numpy()
-        my_r = quaternion_matrix(my_r)[:3, :3]
-        pred = np.dot(model_points, my_r.T) + my_t
-        target = target[0].cpu().detach().numpy()
+            #--------------------------------------------------------
+            # DISTANCE MEASURE: Calculate the distance between the estimated and ground truth poses
+            #--------------------------------------------------------
+            obj_idx = idx[b].item()
+            if obj_idx in sym_list:
+                pred_tensor = torch.from_numpy(pred.astype(np.float32)).to(device)
+                target_tensor = torch.from_numpy(target_b.astype(np.float32)).to(device)
+                pred_exp = pred_tensor.unsqueeze(1)
+                target_exp = target_tensor.unsqueeze(0)
+                dists = torch.norm(pred_exp - target_exp, dim=2)
+                inds = dists.argmin(dim=1)
+                target_matched = target_tensor[inds]
+                dis = torch.mean(torch.norm(pred_tensor - target_matched, dim=1)).item()
+            else:
+                dis = np.mean(np.linalg.norm(pred - target_b, axis=1))
 
-        #--------------------------------------------------------
-        # DISTANCE MEASURE: Calculate the distance between the estimated and ground truth poses
-        #--------------------------------------------------------
-        if idx[0].item() in sym_list:
-            pred = torch.from_numpy(pred.astype(np.float32)).to(device)
-            target = torch.from_numpy(target.astype(np.float32)).to(device)
-            pred_exp = pred.unsqueeze(1)
-            target_exp = target.unsqueeze(0)
-            dists = torch.norm(pred_exp - target_exp, dim=2)
-            inds = dists.argmin(dim=1)
-            target_matched = target[inds]
-            dis = torch.mean(torch.norm(pred - target_matched, dim=1)).item()
-        else:
-            dis = np.mean(np.linalg.norm(pred - target, axis=1))
+            # Add the distance to the total for this object
+            total_distances[obj_idx] += dis
+            
+            if dis < diameter[obj_idx]:
+                success_count[obj_idx] += 1
+                print('No.{0} Batch {1} Pass! Distance: {2}'.format(i, b, dis))
+                fw.write('No.{0} Batch {1} Pass! Distance: {2}\n'.format(i, b, dis))
+            else:
+                print('No.{0} Batch {1} NOT Pass! Distance: {2}'.format(i, b, dis))
+                fw.write('No.{0} Batch {1} NOT Pass! Distance: {2}\n'.format(i, b, dis))
+            num_count[obj_idx] += 1
 
-        if dis < diameter[idx[0].item()]:
-            success_count[idx[0].item()] += 1
-            print('No.{0} Pass! Distance: {1}'.format(i, dis))
-            fw.write('No.{0} Pass! Distance: {1}\n'.format(i, dis))
-        else:
-            print('No.{0} NOT Pass! Distance: {1}'.format(i, dis))
-            fw.write('No.{0} NOT Pass! Distance: {1}\n'.format(i, dis))
-        num_count[idx[0].item()] += 1
-
+    # Print individual object success rates and mean distances
     for i in range(num_objects):
-        print('Object {0} success rate: {1}'.format(objlist[i], float(success_count[i]) / num_count[i]))
-        fw.write('Object {0} success rate: {1}\n'.format(objlist[i], float(success_count[i]) / num_count[i]))
+        if num_count[i] > 0:
+            mean_distance = total_distances[i] / num_count[i]
+            print('Object {0} success rate: {1}, mean distance: {2}'.format(objlist[i], float(success_count[i]) / num_count[i], mean_distance))
+            fw.write('Object {0} success rate: {1}, mean distance: {2}\n'.format(objlist[i], float(success_count[i]) / num_count[i], mean_distance))
+    
+    # Overall success rate
     print('ALL success rate: {0}'.format(float(sum(success_count)) / sum(num_count)))
     fw.write('ALL success rate: {0}\n'.format(float(sum(success_count)) / sum(num_count)))
+    
+    # Overall mean distance
+    if sum(num_count) > 0:
+        overall_mean_distance = sum(total_distances) / sum(num_count)
+        print('ALL mean distance: {0}'.format(overall_mean_distance))
+        fw.write('ALL mean distance: {0}\n'.format(overall_mean_distance))
+        
     fw.close()
 
 

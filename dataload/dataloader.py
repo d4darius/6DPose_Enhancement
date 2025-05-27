@@ -187,7 +187,6 @@ class PoseDataset(Dataset):
         if not sample_data_list:
              raise ValueError(f"No bounding box data for sample ID {sample_id_in_yaml} in folder {folder_id}")
 
-        print(f"Loading bounding box for folder {folder_id}, sample {sample_id_in_yaml}")
         for data in sample_data_list:
             if data['obj_id'] == folder_id:
                 sample_data = data
