@@ -189,6 +189,13 @@ class GNNFeat(nn.Module):
         )
         self.gnn_conv3 = GINConv(self.mlp3)
 
+        self.mlp4 = nn.Sequential(
+            nn.Linear(1024, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 1024)
+        )
+        self.gnn_conv4 = GINConv(self.mlp4)
+
     def forward(self, x, emb, graph_data):
         # We apply pointnet
         x = F.relu(self.g_conv1(x))
@@ -202,9 +209,10 @@ class GNNFeat(nn.Module):
         feat, edge_index = graph_data.x, graph_data.edge_index
         feat_1 = F.relu(self.gnn_conv1(feat, edge_index))
         feat_2 = F.relu(self.gnn_conv2(feat_1, edge_index))
-        feat_3 = self.gnn_conv3(feat_2, edge_index)
+        feat_3 = F.relu(self.gnn_conv3(feat_2, edge_index))
+        feat_4 = self.gnn_conv4(feat_3, edge_index)
         
-        return torch.cat([feat_1, feat_2, feat_3], dim=1) # (bs, 256+512+1024, 500)
+        return torch.cat([feat_1, feat_2, feat_4], dim=1) # (bs, 256+512+1024, 500)
 
 class GNNPoseNet(nn.Module):
     def __init__(self, num_points, num_obj):
