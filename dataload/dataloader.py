@@ -112,11 +112,26 @@ class PoseDataset(Dataset):
         print("Finished preloading ground truth YAML data.")
     
     def load_model_points(self, path):
+        points = []
         with open(path) as f:
+            # Check first line is "ply"
             assert f.readline().strip() == "ply"
-            while f.readline().strip() != "end_header":
-                continue
-            points = [list(map(float, f.readline().split()[:3])) for _ in range(int(f.readline().split()[-1]))]
+            
+            # Parse header to find vertex count
+            vertex_count = None
+            while True:
+                line = f.readline().strip()
+                if line == "end_header":
+                    break
+                if line.startswith("element vertex"):
+                    vertex_count = int(line.split()[-1])
+            
+            # Read vertices
+            if vertex_count is not None:
+                for _ in range(vertex_count):
+                    # Take first 3 values from each line (x, y, z)
+                    points.append(list(map(float, f.readline().split()[:3])))
+            
         return np.array(points, dtype=np.float32)
 
     def load_metadata(self):
@@ -135,7 +150,7 @@ class PoseDataset(Dataset):
         # Load a mask image and convert to tensor.
         mask = Image.open(mask_path).convert("RGBA")
         return self.transform(mask)
-    def load_pose(self, folder_id, sample_id_in_yaml): # Modified arguments
+    def load_pose(self, folder_id, sample_id_in_yaml):
         # Load a 6D pose from cached data
         if folder_id not in self.gt_data_cache:
             # This should ideally not happen if preload_gt_data worked
@@ -149,13 +164,16 @@ class PoseDataset(Dataset):
         sample_data_list = pose_data_for_folder[sample_id_in_yaml]
         if not sample_data_list: # Check if the list is empty
             raise ValueError(f"No pose data for sample ID {sample_id_in_yaml} in folder {folder_id}")
-
-        sample_data = sample_data_list[0] # Assuming there's always at least one item if key exists
+        
+        for data in sample_data_list:
+            if data['obj_id'] == folder_id:
+                sample_data = data
+                break
         rot_mat = np.array(sample_data['cam_R_m2c'], dtype=np.float32).reshape(3, 3)
         tras_vec = np.array(sample_data['cam_t_m2c'], dtype=np.float32) / 1000.0
         return rot_mat, tras_vec
 
-    def load_bbx(self, folder_id, sample_id_in_yaml): # Modified arguments
+    def load_bbx(self, folder_id, sample_id_in_yaml):
         # Load a bounding box from cached data
         if folder_id not in self.gt_data_cache:
             raise ValueError(f"gt.yml data for folder {folder_id} not found in cache.")
@@ -169,9 +187,13 @@ class PoseDataset(Dataset):
         if not sample_data_list:
              raise ValueError(f"No bounding box data for sample ID {sample_id_in_yaml} in folder {folder_id}")
 
-        sample_data = sample_data_list[0]
+        print(f"Loading bounding box for folder {folder_id}, sample {sample_id_in_yaml}")
+        for data in sample_data_list:
+            if data['obj_id'] == folder_id:
+                sample_data = data
+                break
         bbx = np.array(sample_data['obj_bb'], dtype=np.float32)
-        return bbx[0], bbx[1], bbx[2], bbx[3] # Assuming these are x, y, w, h
+        return bbx[0], bbx[1], bbx[2], bbx[3]
 
             
     #Define here some usefull functions to access the data
@@ -283,7 +305,7 @@ class PoseDataset(Dataset):
                      mask_label = (label == 255) # Assuming 255 is the object
                 else:
                      return {"error": f"Unexpected mask format for {mask_path}"}
-                mask_label = ma.getmaskarray(ma.masked_equal(mask_label, False)) # Mask where it's False (background)
+                mask_label = ma.getmaskarray(ma.masked_equal(mask_label, True))
 
         # Ensure rmin, rmax, cmin, cmax are defined before this point for both splits
         if 'rmin' not in locals() or 'rmax' not in locals() or 'cmin' not in locals() or 'cmax' not in locals():
@@ -692,6 +714,7 @@ if __name__ == '__main__':
         dataset_root=dataset_root,
         split='eval',
         seed=42,
+        sampling='random',  # or 'random' or 'FPS'
     )
     # DATASET PLOT TEST:
     idx = 3050

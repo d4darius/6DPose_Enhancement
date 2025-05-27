@@ -26,7 +26,6 @@ from lib.loss import Loss
 from lib.loss_refiner import Loss_refine
 from lib.utils import setup_logger
 import wandb
-from torch_geometric.data import Batch
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -135,7 +134,7 @@ def main():
         dataset = PoseDataset_linemod(opt.dataset_root, 'train', num_points=opt.num_points, add_noise=True, refine=opt.refine_start, device=device, sampling='curvature')
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=opt.batch_size, shuffle=True, num_workers=opt.workers, pin_memory=True, collate_fn=dataset.center_pad_collate)
     if opt.dataset == 'linemod':
-        test_dataset = PoseDataset_linemod(opt.dataset_root, 'eval', num_points=opt.num_points, add_noise=False, noise_trans=0.0, refine=opt.refine_start, device=device, sampling='curvature')
+        test_dataset = PoseDataset_linemod(opt.dataset_root, 'test', num_points=opt.num_points, add_noise=False, noise_trans=0.0, refine=opt.refine_start, device=device, sampling='curvature')
     testdataloader = torch.utils.data.DataLoader(test_dataset, batch_size=opt.batch_size, shuffle=False, num_workers=opt.workers, pin_memory=True, collate_fn=dataset.center_pad_collate)
     
     opt.sym_list = dataset.get_sym_list()
@@ -182,7 +181,7 @@ def main():
                 img = data['image']
                 target = data['target']
                 model_points = data['model_points']
-                graph_batch = Batch.from_data_list(data['graph'])
+                graph_batch = data['graph']
                 idx = data['obj_id']
                 points, choose, img, target, model_points, graph_batch, idx = points.to(device), \
                                                                               choose.to(device), \
@@ -217,7 +216,7 @@ def main():
                 train_count += 1
                 train_frame += idx.size()[0]
 
-                logger.info('Train time {0} Epoch {1} Batch {2} Frame {3} Avg_dis:{4} {5}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), epoch, train_count, train_frame, train_dis_avg), 'refine' if opt.refine_start else '')
+                logger.info('Train time {0} Epoch {1} Batch {2} Frame {3} Avg_dis:{4} {5}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), epoch, train_count, train_frame, train_dis_avg, 'refine' if opt.refine_start else ''))
                 optimizer.step()
                 optimizer.zero_grad()
                 train_dis_avg = 0
@@ -258,7 +257,7 @@ def main():
                 img = data['image']
                 target = data['target']
                 model_points = data['model_points']
-                graph_batch = Batch.from_data_list(data['graph'])
+                graph_batch = data['graph']
                 idx = data['obj_id']
                 points, choose, img, target, model_points, graph_batch, idx = points.to(device), \
                                                                               choose.to(device), \
