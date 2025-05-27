@@ -61,7 +61,7 @@ class PoseDataset(Dataset):
         self.img_length = 640
         self.num_pt_mesh_large = 500
         self.num_pt_mesh_small = 500
-        self.symmetry_obj_idx = [3, 10]
+        self.symmetry_obj_idx = [10, 11]
 
         # Define image transformations
         self.transform = transforms.Compose([
