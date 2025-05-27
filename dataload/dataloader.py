@@ -12,11 +12,13 @@ from PIL import Image
 import numpy.ma as ma
 import torch
 from ultralytics import YOLO
+import open3d as o3d
 from torch_geometric.data import Data
 from torch_geometric.transforms import KNNGraph
 import networkx as nx
 import matplotlib.pyplot as plt
 from torch_geometric.utils import to_networkx
+from torch_geometric.data import Batch
 
 def unnormalize(tensor, mean, std):
     mean = torch.tensor(mean).view(3, 1, 1)
@@ -30,7 +32,7 @@ def to_graph_data(cloud, k=6):
     return data
 
 class PoseDataset(Dataset):
-    def __init__(self, dataset_root, split='train', split_ratio=0.7, seed=42, num_points=500, add_noise=False, noise_trans=0.03, refine=False, device='cpu'):
+    def __init__(self, dataset_root, split='train', split_ratio=0.7, seed=42, num_points=500, add_noise=False, noise_trans=0.03, refine=False, device='cpu', sampling='random'):
 
         self.dataset_root = dataset_root
         self.split = split
@@ -41,6 +43,7 @@ class PoseDataset(Dataset):
         self.refine = refine
         self.device = device
         self.split_ratio = split_ratio
+        self.sampling = sampling
 
         # Object list and metadata
         self.objlist = [1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15]
@@ -58,7 +61,7 @@ class PoseDataset(Dataset):
         self.img_length = 640
         self.num_pt_mesh_large = 500
         self.num_pt_mesh_small = 500
-        self.symmetry_obj_idx = [3, 10]
+        self.symmetry_obj_idx = [10, 11]
 
         # Define image transformations
         self.transform = transforms.Compose([
@@ -109,11 +112,26 @@ class PoseDataset(Dataset):
         print("Finished preloading ground truth YAML data.")
     
     def load_model_points(self, path):
+        points = []
         with open(path) as f:
+            # Check first line is "ply"
             assert f.readline().strip() == "ply"
-            while f.readline().strip() != "end_header":
-                continue
-            points = [list(map(float, f.readline().split()[:3])) for _ in range(int(f.readline().split()[-1]))]
+            
+            # Parse header to find vertex count
+            vertex_count = None
+            while True:
+                line = f.readline().strip()
+                if line == "end_header":
+                    break
+                if line.startswith("element vertex"):
+                    vertex_count = int(line.split()[-1])
+            
+            # Read vertices
+            if vertex_count is not None:
+                for _ in range(vertex_count):
+                    # Take first 3 values from each line (x, y, z)
+                    points.append(list(map(float, f.readline().split()[:3])))
+            
         return np.array(points, dtype=np.float32)
 
     def load_metadata(self):
@@ -132,7 +150,7 @@ class PoseDataset(Dataset):
         # Load a mask image and convert to tensor.
         mask = Image.open(mask_path).convert("RGBA")
         return self.transform(mask)
-    def load_pose(self, folder_id, sample_id_in_yaml): # Modified arguments
+    def load_pose(self, folder_id, sample_id_in_yaml):
         # Load a 6D pose from cached data
         if folder_id not in self.gt_data_cache:
             # This should ideally not happen if preload_gt_data worked
@@ -146,13 +164,16 @@ class PoseDataset(Dataset):
         sample_data_list = pose_data_for_folder[sample_id_in_yaml]
         if not sample_data_list: # Check if the list is empty
             raise ValueError(f"No pose data for sample ID {sample_id_in_yaml} in folder {folder_id}")
-
-        sample_data = sample_data_list[0] # Assuming there's always at least one item if key exists
+        
+        for data in sample_data_list:
+            if data['obj_id'] == folder_id:
+                sample_data = data
+                break
         rot_mat = np.array(sample_data['cam_R_m2c'], dtype=np.float32).reshape(3, 3)
         tras_vec = np.array(sample_data['cam_t_m2c'], dtype=np.float32) / 1000.0
         return rot_mat, tras_vec
 
-    def load_bbx(self, folder_id, sample_id_in_yaml): # Modified arguments
+    def load_bbx(self, folder_id, sample_id_in_yaml):
         # Load a bounding box from cached data
         if folder_id not in self.gt_data_cache:
             raise ValueError(f"gt.yml data for folder {folder_id} not found in cache.")
@@ -166,9 +187,12 @@ class PoseDataset(Dataset):
         if not sample_data_list:
              raise ValueError(f"No bounding box data for sample ID {sample_id_in_yaml} in folder {folder_id}")
 
-        sample_data = sample_data_list[0]
+        for data in sample_data_list:
+            if data['obj_id'] == folder_id:
+                sample_data = data
+                break
         bbx = np.array(sample_data['obj_bb'], dtype=np.float32)
-        return bbx[0], bbx[1], bbx[2], bbx[3] # Assuming these are x, y, w, h
+        return bbx[0], bbx[1], bbx[2], bbx[3]
 
             
     #Define here some usefull functions to access the data
@@ -280,7 +304,7 @@ class PoseDataset(Dataset):
                      mask_label = (label == 255) # Assuming 255 is the object
                 else:
                      return {"error": f"Unexpected mask format for {mask_path}"}
-                mask_label = ma.getmaskarray(ma.masked_equal(mask_label, False)) # Mask where it's False (background)
+                mask_label = ma.getmaskarray(ma.masked_equal(mask_label, True))
 
         # Ensure rmin, rmax, cmin, cmax are defined before this point for both splits
         if 'rmin' not in locals() or 'rmax' not in locals() or 'cmin' not in locals() or 'cmax' not in locals():
@@ -434,29 +458,149 @@ class PoseDataset(Dataset):
 
         return rmin, rmax, cmin, cmax
     
-    def sample_points(self, depth, rmin, rmax, cmin, cmax, mask):
-        choose = mask[rmin:rmax, cmin:cmax].flatten().nonzero()[0]
-        if len(choose) == 0:
-            choose = np.zeros(self.num_points, dtype=np.int32)
-        elif len(choose) > self.num_points:
-            # TODO: choose a better sampling method than random
-            choose = np.random.choice(choose, self.num_points, replace=False)
-        else:
-            choose = np.pad(choose, (0, self.num_points - len(choose)), 'wrap')
+    def sample_points(self, depth_crop, rmin, rmax, cmin, cmax, mask_full):
+        # depth_crop is the depth image already cropped to the bounding box [rmin:rmax, cmin:cmax]
+        # mask_full is the boolean mask for the entire image (e.g., mask_label * mask_depth)
 
-        depth_masked = depth.flatten()[choose][:, np.newaxis]
-        # Slice from precomputed maps
-        xmap_crop = self.xmap_full[rmin:rmax, cmin:cmax]
-        ymap_crop = self.ymap_full[rmin:rmax, cmin:cmax]
+        # 1. Get the mask for the cropped region
+        mask_cropped = mask_full[rmin:rmax, cmin:cmax]
+        
+        # 2. Get indices of valid points within the flattened cropped mask
+        # These indices are relative to the flattened mask_cropped / depth_crop
+        initial_choose = mask_cropped.flatten().nonzero()[0]
+        num_available_points = len(initial_choose)
 
-        xmap_masked = xmap_crop.flatten()[choose][:, np.newaxis]
-        ymap_masked = ymap_crop.flatten()[choose][:, np.newaxis]
+        final_choose_indices = None # This will store the self.num_points indices
+
+        if num_available_points == 0:
+            # No points in the mask, final_choose_indices will be all zeros.
+            # These indices will be applied to flattened depth_crop, xmap_crop, ymap_crop.
+            final_choose_indices = np.zeros(self.num_points, dtype=np.int32)
+        
+        elif num_available_points > self.num_points:
+            if self.sampling == 'random':
+                # Randomly select self.num_points indices from the indices of available points
+                idx_into_initial_choose = np.random.choice(num_available_points, self.num_points, replace=False)
+                final_choose_indices = initial_choose[idx_into_initial_choose]
+            
+            elif self.sampling == 'FPS' or self.sampling == 'curvature':
+                # Build a temporary cloud from all available points in initial_choose
+                # to perform FPS or curvature sampling on.
+                xmap_for_crop_sampling = self.xmap_full[rmin:rmax, cmin:cmax]
+                ymap_for_crop_sampling = self.ymap_full[rmin:rmax, cmin:cmax]
+
+                depth_values_for_sampling = depth_crop.flatten()[initial_choose][:, np.newaxis]
+                xmap_values_for_sampling = xmap_for_crop_sampling.flatten()[initial_choose][:, np.newaxis]
+                ymap_values_for_sampling = ymap_for_crop_sampling.flatten()[initial_choose][:, np.newaxis]
+
+                pt2_sampling = depth_values_for_sampling / 1000.0
+                pt0_sampling = (ymap_values_for_sampling - self.cam_cx) * pt2_sampling / self.cam_fx
+                pt1_sampling = (xmap_values_for_sampling - self.cam_cy) * pt2_sampling / self.cam_fy
+                cloud_for_sampling = np.concatenate((pt0_sampling, pt1_sampling, pt2_sampling), axis=1)
+                
+                # Sample self.num_points from this cloud_for_sampling.
+                # The returned indices (selected_sub_indices) are indices into cloud_for_sampling,
+                # and therefore also indices into the initial_choose array.
+                if self.sampling == 'FPS':
+                    selected_sub_indices = self.FPS_point_sampling(cloud_for_sampling, self.num_points)
+                elif self.sampling == 'curvature':
+                    selected_sub_indices = self.curvature_point_sampling(cloud_for_sampling, self.num_points)
+                else:
+                    return None # Invalid sampling method
+                
+                # The final chosen indices are the original mask indices corresponding to these sampled points
+                final_choose_indices = initial_choose[selected_sub_indices]
+        
+        else: # 0 < num_available_points <= self.num_points
+            # Not enough points, pad with existing points (wrap around)
+            final_choose_indices = np.pad(initial_choose, (0, self.num_points - num_available_points), 'wrap')
+
+        # Now, construct the final cloud using final_choose_indices.
+        # These indices are relative to the flattened cropped region (depth_crop, xmap_at_crop, ymap_at_crop).
+        
+        xmap_at_crop = self.xmap_full[rmin:rmax, cmin:cmax]
+        ymap_at_crop = self.ymap_full[rmin:rmax, cmin:cmax]
+
+        depth_masked = depth_crop.flatten()[final_choose_indices][:, np.newaxis]
+        xmap_masked = xmap_at_crop.flatten()[final_choose_indices][:, np.newaxis]
+        ymap_masked = ymap_at_crop.flatten()[final_choose_indices][:, np.newaxis]
 
         pt2 = depth_masked / 1000.0
-        pt0 = (ymap_masked - self.cam_cx) * pt2 / self.cam_fx
-        pt1 = (xmap_masked - self.cam_cy) * pt2 / self.cam_fy
-        cloud = np.concatenate((pt0, pt1, pt2), axis=1)
-        return cloud, choose
+        pt0 = (ymap_masked - self.cam_cx) * pt2 / self.cam_fx # X coordinate in camera frame
+        pt1 = (xmap_masked - self.cam_cy) * pt2 / self.cam_fy # Y coordinate in camera frame
+        final_cloud = np.concatenate((pt0, pt1, pt2), axis=1)
+        
+        return final_cloud, final_choose_indices
+    
+    def curvature_point_sampling(self, cloud, num_keypoints):
+        #Select 3D keypoints based on curvature and spatial distribution.
+        
+        
+        # Estimate normals
+        point_cloud = o3d.geometry.PointCloud()
+        point_cloud.points = o3d.utility.Vector3dVector(cloud)
+        point_cloud.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=30))
+
+        
+            # Compute curvature using eigenvalues of the covariance matrix
+        curvatures = []
+        kdtree = o3d.geometry.KDTreeFlann(point_cloud)
+        points = np.asarray(point_cloud.points)
+
+        for i in range(len(points)):
+            # Find neighbors
+            _, idx, _ = kdtree.search_knn_vector_3d(point_cloud.points[i], 30)  # Use 30 nearest neighbors
+            neighbors = points[idx, :]
+        
+            # Compute covariance matrix
+            covariance = np.cov(neighbors.T)
+        
+            # Compute eigenvalues
+            eigenvalues = np.linalg.eigvalsh(covariance)
+            eigenvalues = np.sort(eigenvalues)  # Ensure eigenvalues are sorted
+        
+            # Curvature is the smallest eigenvalue divided by the sum of all eigenvalues
+            curvature = eigenvalues[0] / (np.sum(eigenvalues) + 1e-6)  # Add small value to avoid division by zero
+            curvatures.append(curvature)
+
+        curvatures = np.array(curvatures)
+        curvatures = (curvatures - np.min(curvatures)) / (np.max(curvatures) - np.min(curvatures))  # Normalize
+
+
+        # Select keypoints based on curvature and spatial distribution
+        keypoints = []
+        for _ in range(num_keypoints):
+            if len(keypoints) == 0:
+                idx = np.argmax(curvatures)  # Start with the point with the highest curvature
+            else:
+                distances = np.linalg.norm(np.asarray(point_cloud.points) - np.asarray(point_cloud.points)[keypoints[-1]], axis=1)
+                weights = curvatures - 0.5 * distances  # Weighted combination of curvature and distance
+                idx = np.argmax(weights)
+            keypoints.append(idx)
+            curvatures[idx] = 0  # Avoid selecting the same point again
+        
+        return np.array(keypoints)
+    
+    def FPS_point_sampling(self, cloud, num_keypoints):
+        # Select keypoints using farthest point sampling
+        if len(cloud) == 0:
+            return np.array([])
+
+        # Convert to numpy array if not already
+        points = np.asarray(cloud)
+        N = points.shape[0]
+        if num_keypoints >= N:
+            return np.arange(N)
+
+        keypoints = [np.random.randint(N)]
+        distances = np.full(N, np.inf)
+        for _ in range(1, num_keypoints):
+            last = points[keypoints[-1]]
+            dist = np.linalg.norm(points - last, axis=1)
+            distances = np.minimum(distances, dist)
+            next_idx = np.argmax(distances)
+            keypoints.append(next_idx)
+        return np.array(keypoints)
 
     def sample_model_points(self, model_points):
         if len(model_points) >= self.num_points:
@@ -550,6 +694,9 @@ class PoseDataset(Dataset):
                 # Keep as list if can't be stacked
                 pass
         
+        # same for graph
+        batch_dict['graph'] = Batch.from_data_list([d['graph'] for d in batch])
+        
         # Add padding information for debugging/verification
         batch_dict['pad_info'] = pad_info
         return batch_dict
@@ -566,6 +713,7 @@ if __name__ == '__main__':
         dataset_root=dataset_root,
         split='eval',
         seed=42,
+        sampling='random',  # or 'random' or 'FPS'
     )
     # DATASET PLOT TEST:
     idx = 3050
