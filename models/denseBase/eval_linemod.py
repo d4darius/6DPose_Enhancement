@@ -146,7 +146,7 @@ def main():
         target = data['target']
         model_points = data['model_points']
         if opt.gnn:
-            graph_data = data['graph'][0].to(device)
+            graph_data = data['graph'].to(device)
         idx = data['obj_id']
         if len(points.size()) == 2:
             print('No.{0} NOT Pass! Lost detection!'.format(i))
