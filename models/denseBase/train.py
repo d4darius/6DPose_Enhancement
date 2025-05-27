@@ -221,14 +221,14 @@ def main():
                 optimizer.zero_grad()
                 train_dis_avg = 0
 
-                if train_count != 0 and train_count % 100 == 0:
-                    if opt.refine_start:
-                        torch.save(refiner.state_dict(), '{0}/pose_refine_model_current.pth'.format(opt.outf))
+            if train_count != 0:
+                if opt.refine_start:
+                    torch.save(refiner.state_dict(), '{0}/pose_refine_model_current.pth'.format(opt.outf))
+                else:
+                    if opt.gnn:
+                        torch.save(estimator.state_dict(), '{0}/gnn_pose_model_current.pth'.format(opt.outf))
                     else:
-                        if opt.gnn:
-                            torch.save(estimator.state_dict(), '{0}/gnn_pose_model_current.pth'.format(opt.outf))
-                        else:
-                            torch.save(estimator.state_dict(), '{0}/pose_model_current.pth'.format(opt.outf))
+                        torch.save(estimator.state_dict(), '{0}/pose_model_current.pth'.format(opt.outf))
 
         if opt.refine_start:
             torch.save(refiner.state_dict(), '{0}/pose_refine_model_current.pth'.format(opt.outf))

@@ -184,7 +184,7 @@ def main():
             which_idx = b * num_points + which_max
             
             my_r = pred_r[b][which_max].view(-1).cpu().data.numpy()
-            my_t = (points[b].view(1, num_points, 1, 3) + pred_t_b[which_idx].view(1, 1, 1, 3)).view(-1).cpu().data.numpy()
+            my_t = (points[b][which_max] + pred_t_b[which_idx].view(3)).cpu().data.numpy()
             my_pred = np.append(my_r, my_t)
 
             #--------------------------------------------------------
@@ -223,7 +223,9 @@ def main():
             #--------------------------------------------------------
             model_points_b = model_points[b].cpu().detach().numpy()
             my_r_matrix = quaternion_matrix(my_r)[:3, :3]
-            pred = np.dot(model_points_b, my_r_matrix.T) + my_t
+            # Ensure my_t is properly shaped for broadcasting (3,)
+            my_t_reshaped = my_t #if my_t.shape == (3,) else my_t.reshape(3)
+            pred = np.dot(model_points_b, my_r_matrix.T) + my_t_reshaped
             target_b = target[b].cpu().detach().numpy()
 
             #--------------------------------------------------------
