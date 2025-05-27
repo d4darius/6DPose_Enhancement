@@ -21,7 +21,7 @@ import torchvision.transforms as transforms
 import torchvision.utils as vutils
 from torch.autograd import Variable
 from dataload.dataloader import PoseDataset as PoseDataset_linemod
-from lib.network import PoseNet, PoseRefineNet
+from lib.network import PoseNet, PoseRefineNet, GNNPoseNet
 from lib.loss import Loss
 from lib.loss_refiner import Loss_refine
 from lib.utils import setup_logger
@@ -46,20 +46,21 @@ else:
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', type=str, default = 'ycb', help='ycb or linemod')
 parser.add_argument('--dataset_root', type=str, default = '', help='dataset root dir (''YCB_Video_Dataset'' or ''Linemod_preprocessed'')')
-parser.add_argument('--batch_size', type=int, default = 8, help='batch size')
-parser.add_argument('--workers', type=int, default = 2, help='number of data loading workers')
+parser.add_argument('--batch_size', type=int, default = 32, help='batch size')
+parser.add_argument('--workers', type=int, default = 4, help='number of data loading workers')
 parser.add_argument('--lr', default=0.0001, help='learning rate')
 parser.add_argument('--lr_rate', default=0.3, help='learning rate decay rate')
 parser.add_argument('--w', default=0.015, help='learning rate')
 parser.add_argument('--w_rate', default=0.3, help='learning rate decay rate')
 parser.add_argument('--decay_margin', default=0.016, help='margin to decay lr & w')
-parser.add_argument('--refine_margin', default=0.013, help='margin to start the training of iterative refinement')
+parser.add_argument('--refine_margin', default=0.009, help='margin to start the training of iterative refinement')
 parser.add_argument('--noise_trans', default=0.03, help='range of the random noise of translation added to the training data')
 parser.add_argument('--iteration', type=int, default = 2, help='number of refinement iterations')
 parser.add_argument('--nepoch', type=int, default=500, help='max number of epochs to train')
 parser.add_argument('--resume_posenet', type=str, default = '',  help='resume PoseNet model')
 parser.add_argument('--resume_refinenet', type=str, default = '',  help='resume PoseRefineNet model')
 parser.add_argument('--start_epoch', type=int, default = 1, help='which epoch to start')
+parser.add_argument('--gnn', action='store_true', default=False, help='start training on the geometric model')
 opt = parser.parse_args()
 
 # Initialize W&B
@@ -87,7 +88,7 @@ def main():
         opt.num_points = 500
         opt.outf = 'checkpoints/linemod'
         opt.log_dir = 'experiments/logs/linemod'
-        opt.repeat_epoch = 20
+        opt.repeat_epoch = 5
     else:
         print('Unknown dataset')
         return
@@ -95,36 +96,46 @@ def main():
     #--------------------------------------------------------
     # MODEL INITIALIZATION: Setup the estimator and refiner models
     #--------------------------------------------------------
-    estimator = PoseNet(num_points = opt.num_points, num_obj = opt.num_objects)
-    estimator.to(device)
-    refiner = PoseRefineNet(num_points = opt.num_points, num_obj = opt.num_objects)
-    refiner.to(device)
+    if opt.gnn:
+        print("Using GNN DenseFusion")
+        estimator = GNNPoseNet(num_points = opt.num_points, num_obj = opt.num_objects)
+        estimator.to(device)
 
-    if opt.resume_posenet != '':
-        estimator.load_state_dict(torch.load('{0}/{1}'.format(opt.outf, opt.resume_posenet)))
-
-    if opt.resume_refinenet != '':
-        refiner.load_state_dict(torch.load('{0}/{1}'.format(opt.outf, opt.resume_refinenet)))
-        opt.refine_start = True
-        opt.decay_start = True
-        opt.lr *= opt.lr_rate
-        opt.w *= opt.w_rate
-        opt.batch_size = int(opt.batch_size / opt.iteration)
-        optimizer = optim.Adam(refiner.parameters(), lr=opt.lr)
-    else:
         opt.refine_start = False
         opt.decay_start = False
         optimizer = optim.Adam(estimator.parameters(), lr=opt.lr)
+    else:  
+        print("Using Simple DenseFusion")  
+        estimator = PoseNet(num_points = opt.num_points, num_obj = opt.num_objects)
+        estimator.to(device)
+        refiner = PoseRefineNet(num_points = opt.num_points, num_obj = opt.num_objects)
+        refiner.to(device)
+
+        if opt.resume_posenet != '':
+            estimator.load_state_dict(torch.load('{0}/{1}'.format(opt.outf, opt.resume_posenet)))
+
+        if opt.resume_refinenet != '':
+            refiner.load_state_dict(torch.load('{0}/{1}'.format(opt.outf, opt.resume_refinenet)))
+            opt.refine_start = True
+            opt.decay_start = True
+            opt.lr *= opt.lr_rate
+            opt.w *= opt.w_rate
+            #opt.batch_size = int(opt.batch_size / opt.iteration)
+            optimizer = optim.Adam(refiner.parameters(), lr=opt.lr)
+        else:
+            opt.refine_start = False
+            opt.decay_start = False
+            optimizer = optim.Adam(estimator.parameters(), lr=opt.lr)
 
     #--------------------------------------------------------
     # DATASET LOADING: Setup the dataloader and dataset
     #--------------------------------------------------------
     if opt.dataset == 'linemod':
-        dataset = PoseDataset_linemod(opt.dataset_root, 'train', num_points=opt.num_points, add_noise=True, refine=opt.refine_start)
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=opt.batch_size, shuffle=True, num_workers=opt.workers, pin_memory=True)
+        dataset = PoseDataset_linemod(opt.dataset_root, 'train', num_points=opt.num_points, add_noise=True, refine=opt.refine_start, device=device, sampling='random')
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=opt.batch_size, shuffle=True, num_workers=opt.workers, pin_memory=True, collate_fn=dataset.center_pad_collate)
     if opt.dataset == 'linemod':
-        test_dataset = PoseDataset_linemod(opt.dataset_root, 'test', num_points=opt.num_points, add_noise=False, noise_trans=0.0, refine=opt.refine_start)
-    testdataloader = torch.utils.data.DataLoader(test_dataset, batch_size=opt.batch_size, shuffle=False, num_workers=opt.workers, pin_memory=True)
+        test_dataset = PoseDataset_linemod(opt.dataset_root, 'test', num_points=opt.num_points, add_noise=False, noise_trans=0.0, refine=opt.refine_start, device=device, sampling='random')
+    testdataloader = torch.utils.data.DataLoader(test_dataset, batch_size=opt.batch_size, shuffle=False, num_workers=opt.workers, pin_memory=True, collate_fn=dataset.center_pad_collate)
     
     opt.sym_list = dataset.get_sym_list()
     opt.num_points_mesh = dataset.get_num_points_mesh()
@@ -151,6 +162,7 @@ def main():
         logger = setup_logger('epoch%d' % epoch, os.path.join(opt.log_dir, 'epoch_%d_log.txt' % epoch))
         logger.info('Train time {0}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)) + ', ' + 'Training started'))
         train_count = 0
+        train_frame = 0
         train_dis_avg = 0.0
         if opt.refine_start:
             estimator.eval()
@@ -161,7 +173,7 @@ def main():
 
         for rep in range(opt.repeat_epoch):
             for i, data in enumerate(dataloader, 0):
-                if len(data) == 1:
+                if 'error' in data:
                     print(data['error'])
                     continue
                 points = data['cloud']
@@ -169,18 +181,21 @@ def main():
                 img = data['image']
                 target = data['target']
                 model_points = data['model_points']
+                graph_batch = data['graph']
                 idx = data['obj_id']
-                # Debug DataLoader Output
-                #print(f"Repetition {rep} -> Data {i}", end=" - ")
-                points, choose, img, target, model_points, idx = Variable(points).to(device), \
-                                                                 Variable(choose).to(device), \
-                                                                 Variable(img).to(device), \
-                                                                 Variable(target).to(device), \
-                                                                 Variable(model_points).to(device), \
-                                                                 Variable(idx).to(device)
-                pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
+                points, choose, img, target, model_points, graph_batch, idx = points.to(device), \
+                                                                              choose.to(device), \
+                                                                              img.to(device), \
+                                                                              target.to(device), \
+                                                                              model_points.to(device), \
+                                                                              graph_batch.to(device), \
+                                                                              idx.to(device)
+                if opt.gnn:
+                    pred_r, pred_t, pred_c, emb = estimator(img, points, choose, graph_batch, idx)
+                else:
+                    pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
                 loss, dis, new_points, new_target = criterion(pred_r, pred_t, pred_c, target, model_points, idx, points, opt.w, opt.refine_start)
-                #print(loss.item())
+
                 # Log metrics to W&B
                 wandb.log({
                     "epoch": epoch,
@@ -199,19 +214,27 @@ def main():
 
                 train_dis_avg += dis.item()
                 train_count += 1
+                train_frame += idx.size()[0]
 
-                if train_count % opt.batch_size == 0:
-                    logger.info('Train time {0} Epoch {1} Batch {2} Frame {3} Avg_dis:{4}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), epoch, int(train_count / opt.batch_size), train_count, train_dis_avg / opt.batch_size))
-                    optimizer.step()
-                    optimizer.zero_grad()
-                    train_dis_avg = 0
+                logger.info('Train time {0} Epoch {1} Batch {2} Frame {3} Avg_dis:{4} {5}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), epoch, train_count, train_frame, train_dis_avg, 'refine' if opt.refine_start else ''))
+                optimizer.step()
+                optimizer.zero_grad()
+                train_dis_avg = 0
 
-                if train_count != 0 and train_count % 1000 == 0:
-                    if opt.refine_start:
-                        torch.save(refiner.state_dict(), '{0}/pose_refine_model_current.pth'.format(opt.outf))
+            if train_count != 0:
+                if opt.refine_start:
+                    torch.save(refiner.state_dict(), '{0}/pose_refine_model_current.pth'.format(opt.outf))
+                else:
+                    if opt.gnn:
+                        torch.save(estimator.state_dict(), '{0}/gnn_pose_model_current.pth'.format(opt.outf))
                     else:
                         torch.save(estimator.state_dict(), '{0}/pose_model_current.pth'.format(opt.outf))
 
+        if opt.refine_start:
+            torch.save(refiner.state_dict(), '{0}/pose_refine_model_current.pth'.format(opt.outf))
+        else:
+            torch.save(estimator.state_dict(), '{0}/pose_model_current.pth'.format(opt.outf))
+                        
         print('>>>>>>>>----------epoch {0} train finish---------<<<<<<<<'.format(epoch))
 
         #--------------------------------------------------------
@@ -222,39 +245,48 @@ def main():
         test_dis = 0.0
         test_count = 0
         estimator.eval()
-        refiner.eval()
+        #refiner.eval()
 
-        for j, data in enumerate(testdataloader, 0):
-            points = data['cloud']
-            choose = data['choose']
-            img = data['image']
-            target = data['target']
-            model_points = data['model_points']
-            idx = data['obj_id']
-            points, choose, img, target, model_points, idx = Variable(points).to(device), \
-                                                             Variable(choose).to(device), \
-                                                             Variable(img).to(device), \
-                                                             Variable(target).to(device), \
-                                                             Variable(model_points).to(device), \
-                                                             Variable(idx).to(device)
-            pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
-            _, dis, new_points, new_target = criterion(pred_r, pred_t, pred_c, target, model_points, idx, points, opt.w, opt.refine_start)
+        with torch.no_grad():
+            for j, data in enumerate(testdataloader, 0):
+                if 'error' in data:
+                    print(data['error'])
+                    continue
+                points = data['cloud']
+                choose = data['choose']
+                img = data['image']
+                target = data['target']
+                model_points = data['model_points']
+                graph_batch = data['graph']
+                idx = data['obj_id']
+                points, choose, img, target, model_points, graph_batch, idx = points.to(device), \
+                                                                              choose.to(device), \
+                                                                              img.to(device), \
+                                                                              target.to(device), \
+                                                                              model_points.to(device), \
+                                                                              graph_batch.to(device), \
+                                                                              idx.to(device)
+                if opt.gnn:
+                    pred_r, pred_t, pred_c, emb = estimator(img, points, choose, graph_batch, idx)
+                else:
+                    pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
+                _, dis, new_points, new_target = criterion(pred_r, pred_t, pred_c, target, model_points, idx, points, opt.w, opt.refine_start)
 
-            if opt.refine_start:
-                for ite in range(0, opt.iteration):
-                    pred_r, pred_t = refiner(new_points, emb, idx)
-                    dis, new_points, new_target = criterion_refine(pred_r, pred_t, new_target, model_points, idx, new_points)
+                if opt.refine_start:
+                    for ite in range(0, opt.iteration):
+                        pred_r, pred_t = refiner(new_points, emb, idx)
+                        dis, new_points, new_target = criterion_refine(pred_r, pred_t, new_target, model_points, idx, new_points)
 
-            test_dis += dis.item()
-            # Log metrics to W&B
-            wandb.log({
-                "epoch": epoch,
-                "test_batch": test_count,
-                "test_distance": dis.item(),
-            })
-            logger.info('Test time {0} Test Frame No.{1} dis:{2}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), test_count, dis))
+                test_dis += dis.item()
+                # Log metrics to W&B
+                wandb.log({
+                    "epoch": epoch,
+                    "test_batch": test_count,
+                    "test_distance": dis.item(),
+                })
+                logger.info('Test time {0} Test Frame No.{1} dis:{2}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), int(test_count*idx.size()[0]), dis))
 
-            test_count += 1
+                test_count += 1
 
         test_dis = test_dis / test_count
         logger.info('Test time {0} Epoch {1} TEST FINISH Avg dis: {2}'.format(time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - st_time)), epoch, test_dis))
@@ -263,7 +295,10 @@ def main():
             if opt.refine_start:
                 torch.save(refiner.state_dict(), '{0}/pose_refine_model_{1}_{2}.pth'.format(opt.outf, epoch, test_dis))
             else:
-                torch.save(estimator.state_dict(), '{0}/pose_model_{1}_{2}.pth'.format(opt.outf, epoch, test_dis))
+                if opt.gnn:
+                    torch.save(estimator.state_dict(), '{0}/gnn_pose_model_{1}_{2}.pth'.format(opt.outf, epoch, test_dis))
+                else:
+                    torch.save(estimator.state_dict(), '{0}/pose_model_{1}_{2}.pth'.format(opt.outf, epoch, test_dis))
             print(epoch, '>>>>>>>>----------BEST TEST MODEL SAVED---------<<<<<<<<')
         
         #--------------------------------------------------------
@@ -280,15 +315,14 @@ def main():
         #--------------------------------------------------------
         if best_test < opt.refine_margin and not opt.refine_start:
             opt.refine_start = True
-            opt.batch_size = int(opt.batch_size / opt.iteration)
             optimizer = optim.Adam(refiner.parameters(), lr=opt.lr)
 
             if opt.dataset == 'linemod':
-                dataset = PoseDataset_linemod(opt.dataset_root, 'train', num_points=opt.num_points, add_noise=True, refine=opt.refine_start)
-            dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True, num_workers=opt.workers)
+                dataset = PoseDataset_linemod(opt.dataset_root, 'train', num_points=opt.num_points, add_noise=True, refine=opt.refine_start, device=device)
+            dataloader = torch.utils.data.DataLoader(dataset, batch_size=opt.batch_size, shuffle=True, num_workers=opt.workers, pin_memory=True, collate_fn=dataset.center_pad_collate)
             if opt.dataset == 'linemod':
-                test_dataset = PoseDataset_linemod(opt.dataset_root, 'test', num_points=opt.num_points, add_noise=False, noise_trans=0.0, refine=opt.refine_start)
-            testdataloader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=opt.workers)
+                test_dataset = PoseDataset_linemod(opt.dataset_root, 'test', num_points=opt.num_points, add_noise=False, noise_trans=0.0, refine=opt.refine_start, device=device)
+            testdataloader = torch.utils.data.DataLoader(test_dataset, batch_size=opt.batch_size, shuffle=False, num_workers=opt.workers, pin_memory=True, collate_fn=dataset.center_pad_collate)
             
             opt.sym_list = dataset.get_sym_list()
             opt.num_points_mesh = dataset.get_num_points_mesh()
