@@ -38,7 +38,6 @@ else:
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset_root', type=str, default = '', help='dataset root dir')
-parser.add_argument('--workers', type=int, default = 2, help='number of data loading workers')
 parser.add_argument('--model', type=str, default = '',  help='resume PoseNet model')
 parser.add_argument('--refine_model', type=str, default = '',  help='resume PoseRefineNet model')
 parser.add_argument('--refine_start', type=bool, default = False, help='whether to start with refinement')
@@ -95,17 +94,13 @@ def main():
         else:
             opt.refine = False
 
-    testdataset = PoseDataset_linemod(opt.dataset_root, 'eval', num_points=opt.num_points, add_noise=False, noise_trans=0.0, refine=opt.refine_start)
+    testdataset = PoseDataset_linemod(opt.dataset_root, 'eval', num_points=opt.num_points, add_noise=False, noise_trans=0.0, refine=opt.refine_start, device=device)
     
-    # Use a safer DataLoader configuration to prevent segmentation faults
-    # Use fewer workers and set persistent_workers=True for stability
-    worker_count = 0 if opt.batch_size == 1 else min(opt.workers, 4)
     testdataloader = torch.utils.data.DataLoader(
         testdataset, 
         batch_size=opt.batch_size,
         shuffle=False, 
-        num_workers=worker_count,
-        persistent_workers=worker_count > 0,
+        num_workers=0,
         pin_memory=use_cuda,
         collate_fn=testdataset.center_pad_collate
     )
@@ -130,6 +125,7 @@ def main():
     meta = yaml.safe_load(meta_file)
     for obj in objlist:
         diameter.append(meta[obj]['diameter'] / 1000.0 * 0.1)
+    print("Diameter for each object (in meters):")
     print(diameter)
 
     success_count = [0 for i in range(num_objects)]
@@ -249,11 +245,11 @@ def main():
             
             if dis < diameter[obj_idx]:
                 success_count[obj_idx] += 1
-                print('No.{0} Batch {1} Pass! Distance: {2}'.format(i, b, dis))
-                fw.write('No.{0} Batch {1} Pass! Distance: {2}\n'.format(i, b, dis))
+                print('No.{0} Obj_id {1} Pass! Distance: {2}'.format(i, obj_idx, dis))
+                fw.write('No.{0} Obj_id {1} Pass! Distance: {2}\n'.format(i, obj_idx, dis))
             else:
-                print('No.{0} Batch {1} NOT Pass! Distance: {2}'.format(i, b, dis))
-                fw.write('No.{0} Batch {1} NOT Pass! Distance: {2}\n'.format(i, b, dis))
+                print('No.{0} Obj_id {1} NOT Pass! Distance: {2}'.format(i, obj_idx, dis))
+                fw.write('No.{0} Obj_id {1} NOT Pass! Distance: {2}\n'.format(i, obj_idx, dis))
             num_count[obj_idx] += 1
 
     # Print individual object success rates and mean distances
