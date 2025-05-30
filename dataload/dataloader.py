@@ -27,8 +27,12 @@ def unnormalize(tensor, mean, std):
 
 def to_graph_data(cloud, k=6):
     cloud_tensor = torch.from_numpy(cloud.astype(np.float32))
-    data = Data(pos=cloud_tensor)
-    data = KNNGraph(k=k)(data)
+    num_nodes = cloud_tensor.size(0)
+    row = torch.arange(num_nodes).repeat(num_nodes)
+    col = torch.arange(num_nodes).repeat_interleave(num_nodes)
+    mask = row != col  # Remove self-loops if desired
+    edge_index = torch.stack([row[mask], col[mask]], dim=0)
+    data = Data(pos=cloud_tensor, edge_index=edge_index)
     return data
 
 class PoseDataset(Dataset):

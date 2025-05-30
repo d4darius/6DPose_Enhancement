@@ -192,3 +192,9 @@ experiments/logs/
 
 #wandb
 wandb/
+
+#database
+dataset_linemod/
+
+#train .sh
+experiments\scripts\train_linemod.sh

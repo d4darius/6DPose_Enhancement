@@ -16,7 +16,7 @@ import pdb
 import torch.nn.functional as F
 from lib.pspnet import PSPNet
 from torch_geometric.data import Data
-from torch_geometric.nn import GCNConv, GINConv
+from torch_geometric.nn import GCNConv, GINConv, GATv2Conv
 
 psp_models = {
     'resnet18': lambda: PSPNet(sizes=(1, 2, 3, 6), psp_size=512, deep_features_size=256, backend='resnet18'),
@@ -161,40 +161,18 @@ class PoseNet(nn.Module):
         
         return out_rx, out_tx, out_cx, emb.detach()
     
-class GNNFeat(nn.Module):
-    def __init__(self):
-        super(GNNFeat, self).__init__()
+class GATFeat(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(GATFeat, self).__init__()
         self.g_conv1 = torch.nn.Conv1d(3, 64, 1)
         self.c_conv1 = torch.nn.Conv1d(32, 64, 1)
 
-        #self.gnn_conv1 = GCNConv(128, 256)
-        self.mlp1 = nn.Sequential(
-            nn.Linear(128, 256),
-            nn.ReLU(),
-            nn.Linear(256, 256)
-        )
-        self.gnn_conv1 = GINConv(self.mlp1)
-        #self.gnn_conv2 = GCNConv(256, 512)
-        self.mlp2 = nn.Sequential(
-            nn.Linear(256, 256),
-            nn.ReLU(),
-            nn.Linear(256, 512)
-        )
-        self.gnn_conv2 = GINConv(self.mlp2)
 
-        self.mlp3 = nn.Sequential(
-            nn.Linear(512, 512),
-            nn.ReLU(),
-            nn.Linear(512, 1024)
-        )
-        self.gnn_conv3 = GINConv(self.mlp3)
-
-        self.mlp4 = nn.Sequential(
-            nn.Linear(1024, 1024),
-            nn.ReLU(),
-            nn.Linear(1024, 1024)
-        )
-        self.gnn_conv4 = GINConv(self.mlp4)
+        self.gnn_conv1 = GATv2Conv(128, 256, heads=1, concat=True)
+        self.gnn_conv2 = GATv2Conv(256, 512, heads=1, concat=True)
+        self.gnn_conv3 = GATv2Conv(512, 1024, heads=1, concat=True)
+        self.gnn_conv4 = GATv2Conv(1024, 1024, heads=1, concat=True)
+        
 
     def forward(self, x, emb, graph_data):
         # We apply pointnet
@@ -218,7 +196,7 @@ class GNNPoseNet(nn.Module):
     def __init__(self, num_points, num_obj):
         super(GNNPoseNet, self).__init__()
         self.cnn = ModifiedResnet()
-        self.feat = GNNFeat()
+        self.feat = GATFeat()
         
         self.conv1_r = torch.nn.Conv1d(1792, 896, 1)
         self.conv1_t = torch.nn.Conv1d(1792, 896, 1)
