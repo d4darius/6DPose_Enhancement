@@ -61,6 +61,7 @@ parser.add_argument('--resume_posenet', type=str, default = '',  help='resume Po
 parser.add_argument('--resume_refinenet', type=str, default = '',  help='resume PoseRefineNet model')
 parser.add_argument('--start_epoch', type=int, default = 1, help='which epoch to start')
 parser.add_argument('--gnn', action='store_true', default=False, help='start training on the geometric model')
+parser.add_argument('--feat', type=str, default = 'geom',  help='selector for the feature to be used in GIN')
 opt = parser.parse_args()
 
 # Initialize W&B
@@ -141,6 +142,7 @@ def main():
     opt.num_points_mesh = dataset.get_num_points_mesh()
 
     print('>>>>>>>>----------Dataset loaded!---------<<<<<<<<\nlength of the training set: {0}\nlength of the testing set: {1}\nnumber of sample points on mesh: {2}\nsymmetry object list: {3}'.format(len(dataset), len(test_dataset), opt.num_points_mesh, opt.sym_list))
+    print(f'Using {opt.feat}')
 
     criterion = Loss(opt.num_points_mesh, opt.sym_list)
     criterion_refine = Loss_refine(opt.num_points_mesh, opt.sym_list)
@@ -191,7 +193,7 @@ def main():
                                                                               graph_batch.to(device), \
                                                                               idx.to(device)
                 if opt.gnn:
-                    pred_r, pred_t, pred_c, emb = estimator(img, points, choose, graph_batch, idx)
+                    pred_r, pred_t, pred_c, emb = estimator(img, points, choose, graph_batch, idx, opt.feat)
                 else:
                     pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
                 loss, dis, new_points, new_target = criterion(pred_r, pred_t, pred_c, target, model_points, idx, points, opt.w, opt.refine_start)
@@ -296,7 +298,7 @@ def main():
                 torch.save(refiner.state_dict(), '{0}/pose_refine_model_{1}_{2}.pth'.format(opt.outf, epoch, test_dis))
             else:
                 if opt.gnn:
-                    torch.save(estimator.state_dict(), '{0}/gnn_pose_model_{1}_{2}.pth'.format(opt.outf, epoch, test_dis))
+                    torch.save(estimator.state_dict(), '{0}/gnn_pose_model_{1}_{2}_{3}.pth'.format(opt.outf, epoch, test_dis, opt.feat))
                 else:
                     torch.save(estimator.state_dict(), '{0}/pose_model_{1}_{2}.pth'.format(opt.outf, epoch, test_dis))
             print(epoch, '>>>>>>>>----------BEST TEST MODEL SAVED---------<<<<<<<<')

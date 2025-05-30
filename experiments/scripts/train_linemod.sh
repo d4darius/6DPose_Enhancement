@@ -10,4 +10,8 @@ export PYTHONUNBUFFERED="True"
 export CUDA_VISIBLE_DEVICES=0
 
 python3.10 ./models/denseBase/train.py --dataset linemod\
-  --dataset_root ../dataset/linemod/DenseFusion/Linemod_preprocessed
+  --dataset_root ../dataset/linemod/DenseFusion/Linemod_preprocessed\
+  --workers 1\
+  --gnn\
+  --feat geom
+  # Use "geom" for geometric feature inputted in GIN, otherwise use "color"
