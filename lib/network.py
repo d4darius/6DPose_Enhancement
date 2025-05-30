@@ -169,16 +169,16 @@ class GNNFeat(nn.Module):
 
         #self.gnn_conv1 = GCNConv(128, 256)
         self.mlp1 = nn.Sequential(
-            nn.Linear(128, 256),
+            nn.Linear(64, 128),
             nn.ReLU(),
-            nn.Linear(256, 256)
+            nn.Linear(128, 128)
         )
         self.gnn_conv1 = GINConv(self.mlp1)
         #self.gnn_conv2 = GCNConv(256, 512)
         self.mlp2 = nn.Sequential(
-            nn.Linear(256, 256),
+            nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(256, 512)
+            nn.Linear(128, 256)
         )
         self.gnn_conv2 = GINConv(self.mlp2)
 
@@ -189,30 +189,29 @@ class GNNFeat(nn.Module):
         )
         self.gnn_conv3 = GINConv(self.mlp3)
 
-        self.mlp4 = nn.Sequential(
-            nn.Linear(1024, 1024),
-            nn.ReLU(),
-            nn.Linear(1024, 1024)
-        )
-        self.gnn_conv4 = GINConv(self.mlp4)
-
     def forward(self, x, emb, graph_data):
         # We apply pointnet
         x = F.relu(self.g_conv1(x))
         emb = F.relu(self.c_conv1(emb))
 
-        # 2-LAYER GNN (with skip connections)
-        fused = torch.cat((x, emb), dim=1)        # (B, 128, N)
-        fused = fused.permute(0, 2, 1).contiguous() # (B, N, 128)
-        fused = fused.view(-1, 128)                 # (B*N, 128)
-        graph_data.x = fused
-        feat, edge_index = graph_data.x, graph_data.edge_index
-        feat_1 = F.relu(self.gnn_conv1(feat, edge_index))
-        feat_2 = F.relu(self.gnn_conv2(feat_1, edge_index))
-        feat_3 = F.relu(self.gnn_conv3(feat_2, edge_index))
-        feat_4 = self.gnn_conv4(feat_3, edge_index)
+        # 3-LAYER GIN (Parallel Processing)
+        x = x.permute(0, 2, 1).contiguous()
+        x = x.view(-1, 64)
+        emb = emb.permute(0, 2, 1).contiguous()
+        emb = emb.view(-1, 64)
+        edge_index = graph_data.edge_index
+
+        x_1 = F.relu(self.gnn_conv1(x, edge_index))
+        emb_1 = F.relu(self.gnn_conv1(emb, edge_index))
+        pf_1 = torch.cat((x_1, emb_1), dim=1)
+
+        x_2 = F.relu(self.gnn_conv2(x_1, edge_index))
+        emb_2 = F.relu(self.gnn_conv2(emb_1, edge_index))
+        pf_2 = torch.cat((x_2, emb_2), dim=1)
+
+        feat_glob = F.relu(self.gnn_conv3(pf_2, edge_index))
         
-        return torch.cat([feat_1, feat_2, feat_4], dim=1) # (bs, 256+512+1024, 500)
+        return torch.cat([pf_1, pf_2, feat_glob], dim=1) # (bs, 256+512+1024, 500)
 
 class GNNPoseNet(nn.Module):
     def __init__(self, num_points, num_obj):
