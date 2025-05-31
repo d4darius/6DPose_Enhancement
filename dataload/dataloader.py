@@ -32,7 +32,7 @@ def to_graph_data(cloud, k=6):
     return data
 
 class PoseDataset(Dataset):
-    def __init__(self, dataset_root, split='train', split_ratio=0.7, seed=42, num_points=500, add_noise=False, noise_trans=0.03, refine=False, device='cpu', sampling='random'):
+    def __init__(self, dataset_root, split='train', split_ratio=0.7, seed=42, num_points=500, add_noise=False, noise_trans=0.03, refine=False, device='cpu', sampling='random', use_mask=False):
 
         self.dataset_root = dataset_root
         self.split = split
@@ -44,6 +44,7 @@ class PoseDataset(Dataset):
         self.device = device
         self.split_ratio = split_ratio
         self.sampling = sampling
+        self.use_mask = use_mask
 
         # Object list and metadata
         self.objlist = [1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15]
@@ -56,7 +57,6 @@ class PoseDataset(Dataset):
         self.cam_cy = 242.04899
         self.cam_fx = 572.41140
         self.cam_fy = 573.57043
-        self.border_list = [-1, 40, 80, 120, 160, 200, 240, 280, 320, 360, 400, 440, 480, 520, 560, 600, 640, 680]
         self.img_width = 480
         self.img_length = 640
         self.num_pt_mesh_large = 500
@@ -272,15 +272,20 @@ class PoseDataset(Dataset):
                 # Ensure the bounding box is within image dimensions
                 rmin, rmax = max(0, rmin), min(480, rmax)
                 cmin, cmax = max(0, cmin), min(640, cmax)
-            # Mask from SegNet
-            mask_path = os.path.join(self.dataset_root, 'segnet_results', f"{folder_id:02d}_label", f"{sample_id:04d}_label.png")
-            if not os.path.exists(mask_path):
-                return {
-                    "error": f"Mask file not found: {mask_path}"
-                }
+            if self.use_mask:
+                # Mask from SegNet
+                mask_path = os.path.join(self.dataset_root, 'segnet_results', f"{folder_id:02d}_label", f"{sample_id:04d}_label.png")
+                if not os.path.exists(mask_path):
+                    return {
+                        "error": f"Mask file not found: {mask_path}"
+                    }
+                else:
+                    label = np.array(Image.open(mask_path))
+                    mask_label = ma.getmaskarray(ma.masked_equal(label, np.array(255))) # Assuming 255 is object
             else:
-                label = np.array(Image.open(mask_path))
-                mask_label = ma.getmaskarray(ma.masked_equal(label, np.array(255))) # Assuming 255 is object
+                # If no mask is used, create a dummy mask
+                mask_label = np.ones((self.img_width, self.img_length), dtype=bool)
+                mask_label[rmin:rmax, cmin:cmax] = True
         else: # 'train' split
             try:
                 # BB from ground truth (cached)
@@ -295,7 +300,8 @@ class PoseDataset(Dataset):
                 return {
                     "error": f"Mask file not found: {mask_path}"
                 }
-            else:
+            if self.use_mask:
+                # Load the mask image
                 label = np.array(Image.open(mask_path))
                 # Ensure mask_label is boolean and 2D
                 if label.ndim == 3 and label.shape[2] >= 3: # Check if it's an RGB-like mask
@@ -305,6 +311,10 @@ class PoseDataset(Dataset):
                 else:
                      return {"error": f"Unexpected mask format for {mask_path}"}
                 mask_label = ma.getmaskarray(ma.masked_equal(mask_label, True))
+            else:
+                # If no mask is used, create a dummy mask
+                mask_label = np.ones((self.img_width, self.img_length), dtype=bool)
+                mask_label[rmin:rmax, cmin:cmax] = True
 
         # Ensure rmin, rmax, cmin, cmax are defined before this point for both splits
         if 'rmin' not in locals() or 'rmax' not in locals() or 'cmin' not in locals() or 'cmax' not in locals():
@@ -614,7 +624,10 @@ class PoseDataset(Dataset):
 
     
     def get_sym_list(self):
-        return self.symmetry_obj_idx
+        if self.use_mask:
+            return self.symmetry_obj_idx
+        else:
+            return []
     
     def get_num_points_mesh(self):
         if self.refine:
