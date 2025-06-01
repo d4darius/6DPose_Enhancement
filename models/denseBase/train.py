@@ -269,7 +269,7 @@ def main():
                                                                               graph_batch.to(device), \
                                                                               idx.to(device)
                 if opt.gnn:
-                    pred_r, pred_t, pred_c, emb = estimator(img, points, choose, graph_batch, idx)
+                    pred_r, pred_t, pred_c, emb = estimator(img, points, choose, graph_batch, idx, opt.feat)
                 else:
                     pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
                 _, dis, new_points, new_target = criterion(pred_r, pred_t, pred_c, target, model_points, idx, points, opt.w, opt.refine_start)
