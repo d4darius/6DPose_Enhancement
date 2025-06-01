@@ -53,7 +53,7 @@ parser.add_argument('--lr_rate', default=0.3, help='learning rate decay rate')
 parser.add_argument('--w', default=0.015, help='learning rate')
 parser.add_argument('--w_rate', default=0.3, help='learning rate decay rate')
 parser.add_argument('--decay_margin', default=0.016, help='margin to decay lr & w')
-parser.add_argument('--refine_margin', default=0.009, help='margin to start the training of iterative refinement')
+parser.add_argument('--refine_margin', default=0.0001, help='margin to start the training of iterative refinement')
 parser.add_argument('--noise_trans', default=0.03, help='range of the random noise of translation added to the training data')
 parser.add_argument('--iteration', type=int, default = 2, help='number of refinement iterations')
 parser.add_argument('--nepoch', type=int, default=500, help='max number of epochs to train')
@@ -112,21 +112,21 @@ def main():
         refiner = PoseRefineNet(num_points = opt.num_points, num_obj = opt.num_objects)
         refiner.to(device)
 
-        if opt.resume_posenet != '':
-            estimator.load_state_dict(torch.load('{0}/{1}'.format(opt.outf, opt.resume_posenet)))
+    if opt.resume_posenet != '':
+        estimator.load_state_dict(torch.load('{0}/{1}'.format(opt.outf, opt.resume_posenet)))
 
-        if opt.resume_refinenet != '':
-            refiner.load_state_dict(torch.load('{0}/{1}'.format(opt.outf, opt.resume_refinenet)))
-            opt.refine_start = True
-            opt.decay_start = True
-            opt.lr *= opt.lr_rate
-            opt.w *= opt.w_rate
-            #opt.batch_size = int(opt.batch_size / opt.iteration)
-            optimizer = optim.Adam(refiner.parameters(), lr=opt.lr)
-        else:
-            opt.refine_start = False
-            opt.decay_start = False
-            optimizer = optim.Adam(estimator.parameters(), lr=opt.lr)
+    if opt.resume_refinenet != '':
+        refiner.load_state_dict(torch.load('{0}/{1}'.format(opt.outf, opt.resume_refinenet)))
+        opt.refine_start = True
+        opt.decay_start = True
+        opt.lr *= opt.lr_rate
+        opt.w *= opt.w_rate
+        #opt.batch_size = int(opt.batch_size / opt.iteration)
+        optimizer = optim.Adam(refiner.parameters(), lr=opt.lr)
+    else:
+        opt.refine_start = False
+        opt.decay_start = False
+        optimizer = optim.Adam(estimator.parameters(), lr=opt.lr)
 
     #--------------------------------------------------------
     # DATASET LOADING: Setup the dataloader and dataset
