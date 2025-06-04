@@ -161,20 +161,26 @@ class PoseNet(nn.Module):
         
         return out_rx, out_tx, out_cx, emb.detach()
     
-class GATGINFeat(nn.Module):
+class GNNFeat(nn.Module):
     def __init__(self):
-        super(GATGINFeat, self).__init__()
+        super(GNNFeat, self).__init__()
         self.g_conv1 = torch.nn.Conv1d(3, 64, 1)
         self.c_conv1 = torch.nn.Conv1d(32, 64, 1)
+        
+        self.gnn_conv0 = GATv2Conv(64, 64, heads=2, concat=True)
 
-
-        self.gnn_conv1 = GATv2Conv(128, 256, heads=1, concat=True)
-       
-       #self.gnn_conv2 = GCNConv(256, 512)
-        self.mlp2 = nn.Sequential(
-            nn.Linear(256, 256),
+        #self.gnn_conv1 = GCNConv(128, 256)
+        self.mlp1 = nn.Sequential(
+            nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(256, 512)
+            nn.Linear(128, 128)
+        )
+        self.gnn_conv1 = GINConv(self.mlp1)
+        #self.gnn_conv2 = GCNConv(256, 512)
+        self.mlp2 = nn.Sequential(
+            nn.Linear(128, 256),
+            nn.ReLU(),
+            nn.Linear(256, 256)
         )
         self.gnn_conv2 = GINConv(self.mlp2)
 
@@ -185,52 +191,61 @@ class GATGINFeat(nn.Module):
         )
         self.gnn_conv3 = GINConv(self.mlp3)
 
-        self.mlp4 = nn.Sequential(
-            nn.Linear(1024, 1024),
-            nn.ReLU(),
-            nn.Linear(1024, 1024)
-        )
-        self.gnn_conv4 = GINConv(self.mlp4)
+        self.fc = nn.Linear(64, 256)
+
 
     def forward(self, x, emb, graph_data):
-        # We apply pointnet
         x = F.relu(self.g_conv1(x))
         emb = F.relu(self.c_conv1(emb))
 
-        # 2-LAYER GNN (with skip connections)
-        fused = torch.cat((x, emb), dim=1)        # (B, 128, N)
-        fused = fused.permute(0, 2, 1).contiguous() # (B, N, 128)
-        fused = fused.view(-1, 128)                 # (B*N, 128)
-        graph_data.x = fused
-        feat, edge_index = graph_data.x, graph_data.edge_index
-        feat_1 = F.relu(self.gnn_conv1(feat, edge_index))
-        feat_2 = F.relu(self.gnn_conv2(feat_1, edge_index))
-        feat_3 = F.relu(self.gnn_conv3(feat_2, edge_index))
-        feat_4 = self.gnn_conv4(feat_3, edge_index)
+        feat = emb
+        B, C, N = feat.shape  # B=batch, C=64, N=num_points
+        feat = feat.permute(0, 2, 1).contiguous().view(-1, 64)  # (B*N, 64)
+        edge_index = graph_data.edge_index
+
+        feat_0 = F.relu(self.gnn_conv0(feat, edge_index))
         
-        return torch.cat([feat_1, feat_2, feat_4], dim=1) # (bs, 256+512+1024, 500)
+        feat_1 = F.relu(self.gnn_conv1(feat_0, edge_index))  # (B*N, 128)
+        feat_2 = F.relu(self.gnn_conv2(feat_1, edge_index))  # (B*N, 256)
+
+        # Reshape back to (B, C, N)
+        feat_1 = feat_1.view(B, N, 128).permute(0, 2, 1).contiguous()  # (B, 128, N)
+        feat_2 = feat_2.view(B, N, 256).permute(0, 2, 1).contiguous()  # (B, 256, N)
+
+        x_t = x.permute(0, 2, 1)  # (B, N, 64)
+        oth_feat = F.relu(self.fc(x_t))  # (B, N, 256)
+        oth_feat = oth_feat.permute(0, 2, 1).contiguous()  # (B, 256, N)
+
+        fused = torch.cat([feat_2, oth_feat], dim=1)  # (B, 512, N)
+        fused_flat = fused.permute(0, 2, 1).contiguous().view(-1, 512)  # (B*N, 512)
+        feat_3 = self.gnn_conv3(fused_flat, edge_index)  # (B*N, 1024)
+        feat_3 = feat_3.view(B, N, 1024).permute(0, 2, 1).contiguous()  # (B, 1024, N)
+
+        return torch.cat([feat_1, feat_2, feat_3], dim=1)  # (B, 128+256+1024, N)
 
 class GNNPoseNet(nn.Module):
     def __init__(self, num_points, num_obj):
         super(GNNPoseNet, self).__init__()
         self.cnn = ModifiedResnet()
-        self.feat = GATGINFeat()
+        self.feat = GNNFeat()
+
+        in_layers = 1408
         
-        self.conv1_r = torch.nn.Conv1d(1792, 896, 1)
-        self.conv1_t = torch.nn.Conv1d(1792, 896, 1)
-        self.conv1_c = torch.nn.Conv1d(1792, 896, 1)
+        self.conv1_r = torch.nn.Conv1d(in_layers, 704, 1)
+        self.conv1_t = torch.nn.Conv1d(in_layers, 704, 1)
+        self.conv1_c = torch.nn.Conv1d(in_layers, 704, 1)
 
-        self.conv2_r = torch.nn.Conv1d(896, 448, 1)
-        self.conv2_t = torch.nn.Conv1d(896, 448, 1)
-        self.conv2_c = torch.nn.Conv1d(896, 448, 1)
+        self.conv2_r = torch.nn.Conv1d(704, 352, 1)
+        self.conv2_t = torch.nn.Conv1d(704, 352, 1)
+        self.conv2_c = torch.nn.Conv1d(704, 352, 1)
 
-        self.conv3_r = torch.nn.Conv1d(448, 224, 1)
-        self.conv3_t = torch.nn.Conv1d(448, 224, 1)
-        self.conv3_c = torch.nn.Conv1d(448, 224, 1)
+        self.conv3_r = torch.nn.Conv1d(352, 176, 1)
+        self.conv3_t = torch.nn.Conv1d(352, 176, 1)
+        self.conv3_c = torch.nn.Conv1d(352, 176, 1)
 
-        self.conv4_r = torch.nn.Conv1d(224, num_obj*4, 1) #quaternion
-        self.conv4_t = torch.nn.Conv1d(224, num_obj*3, 1) #translation
-        self.conv4_c = torch.nn.Conv1d(224, num_obj*1, 1) #confidence
+        self.conv4_r = torch.nn.Conv1d(176, num_obj*4, 1) #quaternion
+        self.conv4_t = torch.nn.Conv1d(176, num_obj*3, 1) #translation
+        self.conv4_c = torch.nn.Conv1d(176, num_obj*1, 1) #confidence
 
         self.num_points = num_points
         self.num_obj = num_obj
@@ -246,8 +261,9 @@ class GNNPoseNet(nn.Module):
         emb = torch.gather(emb, 2, choose).contiguous()
         x = x.transpose(2, 1).contiguous()
 
-        gnn_fusfeat = self.feat(x, emb, graph_data)
-        gnn_fusfeat = gnn_fusfeat.view(bs, self.num_points, 1792).permute(0, 2, 1).contiguous()  # (bs, 768, num_points)
+        gnn_fusfeat = self.feat(x, emb, graph_data)  # (bs, 1408, num_points)
+        # No need to reshape, just permute if needed for Conv1d
+        gnn_fusfeat = gnn_fusfeat.contiguous()
 
         rx = F.relu(self.conv1_r(gnn_fusfeat))
         tx = F.relu(self.conv1_t(gnn_fusfeat))
