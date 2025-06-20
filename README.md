@@ -80,3 +80,122 @@ Before training, convert the preprocessed Linemod dataset into the format requir
 will save a detailed report in models/yolo/test_results
 
 `python models/yolo/test.py --weights models/yolo/runs/detect/linemod_finetune/weights/best.pt`
+
+## Training the Model
+
+The 6D pose estimation pipeline consists of several stages, as illustrated below. First, the RGB image is processed by a YOLO detector to localize the object and crop the region of interest. The corresponding depth image is used to sample 3D points from the cropped area. Color features are extracted from the cropped RGB using a CNN, while 3D coordinates are obtained from the depth data. These features are combined and used to construct a graph, where nodes represent sampled points and edges are built using k-nearest neighbors (KNN). The graph is then processed by a stack of Graph Isomorphism Network (GIN) layers to fuse features. Finally, the fused features are passed to the PoseNet, which predicts the 6D pose (rotation and translation) of the object.
+
+<p align="center"> <img src="docs/Pose_Architecture_Complete.png" alt="Overview of the proposed 6D pose estimation pipeline" width="800"/> </p>
+
+To train the 6D pose estimation model on the Linemod dataset, use the provided training script:
+
+```bash
+bash experiments/scripts/train_linemod.sh
+```
+
+or, if you want to run it manually:
+
+```bash
+python3.10 ./models/denseBase/train.py --dataset linemod --dataset_root path/to/linemod/dataset
+```
+
+**Key parameters:**
+
+- `--dataset`: Dataset to use. For Linemod, set to `linemod`.
+- `--dataset_root`: Path to the root directory of the preprocessed dataset.
+- `--batch_size`: Number of samples per batch (default: 32).
+- `--workers`: Number of worker processes for data loading (default: 4). Increase for faster data loading if you have enough CPU cores.
+- `--lr`: Initial learning rate (default: 0.0001).
+- `--lr_rate`: Learning rate decay rate (default: 0.3).
+- `--w`: Weight for the loss function (default: 0.015).
+- `--w_rate`: Weight decay rate (default: 0.3).
+- `--decay_margin`: Margin to trigger learning rate and weight decay (default: 0.016).
+- `--noise_trans`: Range of random translation noise added to training data (default: 0.03).
+- `--iteration`: Number of refinement iterations (default: 2, but not used unless refinement is enabled).
+- `--nepoch`: Number of training epochs (default: 500).
+- `--resume_posenet`: Path to a checkpoint to resume PoseNet training from.
+- `--start_epoch`: Epoch number to start training from (default: 1).
+- `--gnn`: Add this flag to use the GNN-based model instead of the standard DenseFusion.
+
+**Example:**
+
+```bash
+python3.10 ./models/denseBase/train.py --dataset linemod --dataset_root path/to/linemod/dataset --batch_size 16 --workers 8 --gnn
+```
+
+## Evaluating the Model
+
+After training, evaluate your model's performance using the evaluation script:
+
+```bash
+bash experiments/scripts/eval_linemod.sh
+```
+
+or manually:
+
+```bash
+python3.10 ./models/denseBase/eval_linemod.py --dataset_root path/to/linemod/dataset --model checkpoints/linemod/pose_model_current.pth
+```
+
+**Key parameters:**
+
+- `--dataset_root`: Path to the root directory of the preprocessed dataset.
+- `--model`: Path to the trained PoseNet model checkpoint (`.pth` file).
+- `--num_points`: Number of points to sample from the input point cloud (default: 500).
+- `--gnn`: Add this flag to evaluate a GNN-based model.
+- `--batch_size`: Batch size for evaluation (default: 1).
+- `--no_cuda`: Add this flag to force evaluation on CPU even if a GPU is available.
+
+**Example:**
+
+```bash
+python3.10 ./models/denseBase/eval_linemod.py --dataset_root path/to/linemod/dataset --model checkpoints/linemod/pose_model_current.pth --gnn
+```
+
+**Output:**
+
+- The script prints per-object and overall success rates and mean distances.
+- Detailed logs are saved in eval_result_logs.txt.
+
+## Visualizing Pose Estimates
+
+To visualize pose predictions for each object, use the plotting script:
+
+```bash
+bash experiments/scripts/plot_eval_linemod.sh
+```
+
+or manually:
+
+```bash
+python3.10 ./models/denseBase/plot_inference.py --dataset_root path/to/linemod/dataset --model checkpoints/linemod/pose_model_current.pth
+```
+
+**Key parameters:**
+
+- `--dataset_root`: Path to the root directory of the preprocessed dataset.
+- `--model`: Path to the trained PoseNet model checkpoint (`.pth` file).
+- `--output_dir`: Directory where the visualization images will be saved (default: eval_linemod).
+- `--num_points`: Number of points to sample for visualization (default: 500).
+- `--img_size`: Size of the output images (default: 480).
+- `--gnn`: Add this flag to visualize using the GNN-based model.
+
+**Example:**
+
+```bash
+python3.10 ./models/denseBase/plot_inference.py --dataset_root path/to/linemod/dataset --model checkpoints/linemod/pose_model_current.pth --output_dir plots/eval_linemod --img_size 640
+```
+
+**Output:**
+
+- The script saves images with projected 3D model points overlaid on the RGB images for each object.
+- Images are saved in the specified `output_dir`, organized by model checkpoint.
+
+<p align="center"> <img src="docs/Pose_example.png" alt="Pose Visualization Example" width="500"/> </p>
+
+**Note:**  
+For all scripts, you can view additional optional arguments and their defaults by running with `--help`, e.g.:
+
+```bash
+python3.10 ./models/denseBase/train.py --help
+```
