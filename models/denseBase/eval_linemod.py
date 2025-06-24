@@ -45,7 +45,7 @@ parser.add_argument('--num_points', type=int, default = 500, help='number of poi
 parser.add_argument('--gnn', action='store_true', default=False, help='start training on the geometric model')
 parser.add_argument('--batch_size', type=int, default=1, help='batch size for evaluation')
 parser.add_argument('--no_cuda', action='store_true', default=False, help='disable CUDA (use CPU only)')
-parser.add_argument('--feat', type=str, default = 'geom',  help='resume PoseNet model')
+parser.add_argument('--feat', type=str, default = 'color',  help='resume PoseNet model')
 
 opt = parser.parse_args()
 
