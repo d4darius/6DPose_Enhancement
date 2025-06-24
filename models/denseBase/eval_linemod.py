@@ -45,6 +45,7 @@ parser.add_argument('--num_points', type=int, default = 500, help='number of poi
 parser.add_argument('--gnn', action='store_true', default=False, help='start training on the geometric model')
 parser.add_argument('--batch_size', type=int, default=1, help='batch size for evaluation')
 parser.add_argument('--no_cuda', action='store_true', default=False, help='disable CUDA (use CPU only)')
+parser.add_argument('--feat', type=str, default = 'color',  help='resume PoseNet model')
 
 opt = parser.parse_args()
 
@@ -107,6 +108,7 @@ def main():
     # Use actual batch size from dataloader
     bs = testdataloader.batch_size
     print(f"Evaluating with batch size: {bs}")
+    print(f"Using module with feature {opt.feat}")
     
     sym_list = testdataset.get_sym_list()
     num_points_mesh = testdataset.get_num_points_mesh()
@@ -166,7 +168,7 @@ def main():
         # POSE INFERENCE: Estimate the initial pose using PoseNet
         #--------------------------------------------------------
         if opt.gnn:
-            pred_r, pred_t, pred_c, emb = estimator(img, points, choose, graph_data, idx)
+            pred_r, pred_t, pred_c, emb = estimator(img, points, choose, graph_data, idx, opt.feat)
         else:
             pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
         pred_r = pred_r / torch.norm(pred_r, dim=2).view(batch_size, num_points, 1)
