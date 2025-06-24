@@ -25,7 +25,7 @@ def unnormalize(tensor, mean, std):
     std = torch.tensor(std).view(3, 1, 1)
     return tensor * std + mean
 
-def to_graph_data(cloud, k=6):
+def to_graph_data(cloud, k=20):
     cloud_tensor = torch.from_numpy(cloud.astype(np.float32))
     data = Data(pos=cloud_tensor)
     data = KNNGraph(k=k)(data)
