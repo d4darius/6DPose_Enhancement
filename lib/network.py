@@ -14,6 +14,7 @@ from PIL import Image
 import numpy as np
 import pdb
 import torch.nn.functional as F
+from torchvision.models import resnet18, resnet34
 from lib.pspnet import PSPNet
 from torch_geometric.data import Data
 from torch_geometric.nn import GCNConv, GINConv
@@ -26,6 +27,23 @@ psp_models = {
     'resnet152': lambda: PSPNet(sizes=(1, 2, 3, 6), psp_size=2048, deep_features_size=1024, backend='resnet152')
 }
 
+class BackboneResnet(nn.Module):
+    def __init__(self):
+        super().__init__()
+        resnet = resnet18(pretrained=True)
+        self.backbone = nn.Sequential(
+            resnet.conv1,
+            resnet.bn1,
+            resnet.relu,
+            resnet.maxpool,
+            resnet.layer1,
+            resnet.layer2,
+            resnet.layer3
+        )
+
+    def forward(self, x):
+        return self.backbone(x)
+
 class ModifiedResnet(nn.Module):
 
     def __init__(self, usegpu=True):
@@ -37,6 +55,76 @@ class ModifiedResnet(nn.Module):
     def forward(self, x):
         x = self.model(x)
         return x
+
+class PoseCNN_Net(nn.Module):
+    def __init__(self, feature_dim=256):
+        super(PoseCNN_Net, self).__init__()
+
+        # REGRESSION 2D TRANSLATION
+        self.offset_head = nn.Sequential(
+            nn.Conv1d(feature_dim, 128, 1),
+            nn.ReLU(),
+            nn.Conv1d(128, 2, 1)  # Output: [dx, dy]
+        )
+
+        # DEPTH REGRESSION
+        self.depth_head = nn.Sequential(
+            nn.Conv1d(feature_dim, 128, 1),
+            nn.ReLU(),
+            nn.Conv1d(128, 1, 1)
+        )
+
+        # REGRESSION QUATERNION
+        self.rotation_head = nn.Sequential(
+            nn.Linear(feature_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 4)
+        )
+
+        self.cnn = BackboneResnet()
+
+    def forward(self, img, choose):
+        bs = img.size(0)
+
+        # FE
+        feat = self.cnn(img)
+        bs, c, h, w = feat.size()
+        feat_flat = feat.view(bs, c, -1)
+
+        # Convert original pixel indices to feature map scale
+        H_orig, W_orig = 480, 640             # <-- Adjust based on your dataset resolution
+        y_idx = choose // W_orig
+        x_idx = choose % W_orig
+
+        x_feat = (x_idx.float() * w / W_orig).long()  # Rescaled to feature map width
+        y_feat = (y_idx.float() * h / H_orig).long()  # Rescaled to feature map height
+
+        # Compute flattened indices for feature map
+        choose_feat = (y_feat * w + x_feat).long()    # [B, N]
+        choose_feat = choose_feat.unsqueeze(1).repeat(1, c, 1)  # [B, C, N]
+
+        # Gather features at chosen pixels
+        emb = torch.gather(feat_flat, 2, choose_feat).contiguous()  # [B, C, N]
+
+        # OFFSET and DEPTH PREDICTION
+        offsets = self.offset_head(emb)
+        pred_depth = self.depth_head(emb)
+
+        # Compute 2D coords from original (rescaled) positions
+        coords = torch.stack([x_feat.float(), y_feat.float()], dim=1)
+
+        # VOTING CENTER ESTIMATION
+        pred_centers = coords + offsets
+        tx = pred_centers[:, 0, :].mean(dim=1)
+        ty = pred_centers[:, 1, :].mean(dim=1)
+        tz = pred_depth.squeeze(1).mean(dim=1)
+        out_tx = torch.stack([tx, ty, tz], dim=1)  # [B, 3]
+
+        # Pool features and regress rotation
+        pooled = torch.mean(emb, dim=2)
+        out_rx = self.rotation_head(pooled)
+
+        return out_rx, out_tx, emb.detach()
 
 class PoseNetFeat(nn.Module):
     def __init__(self, num_points):

@@ -13,8 +13,8 @@ import torchvision.transforms as transforms
 import torchvision.utils as vutils
 from torch.autograd import Variable
 from dataload.dataloader import PoseDataset as PoseDataset_linemod
-from lib.network import PoseNet, PoseRefineNet, GNNPoseNet
-from lib.loss import Loss
+from lib.network import PoseCNN_Net, PoseNet, PoseRefineNet, GNNPoseNet
+from lib.loss import PoseCNNLoss, Loss
 from lib.loss_refiner import Loss_refine
 from lib.transformations import euler_matrix, quaternion_matrix, quaternion_from_matrix
 import wandb
@@ -42,6 +42,7 @@ parser.add_argument('--model', type=str, default = '',  help='resume PoseNet mod
 parser.add_argument('--refine_model', type=str, default = '',  help='resume PoseRefineNet model')
 parser.add_argument('--refine_start', type=bool, default = False, help='whether to start with refinement')
 parser.add_argument('--num_points', type=int, default = 500, help='number of points to sample')
+parser.add_argument('--posecnn', action='store_true', default=False, help='Train using PoseCNN-style pipeline')
 parser.add_argument('--gnn', action='store_true', default=False, help='start training on the geometric model')
 parser.add_argument('--batch_size', type=int, default=1, help='batch size for evaluation')
 parser.add_argument('--no_cuda', action='store_true', default=False, help='disable CUDA (use CPU only)')
@@ -69,8 +70,8 @@ def main():
     #--------------------------------------------------------
     # MODEL INITIALIZATION: Setup the estimator and refiner models
     #--------------------------------------------------------
-    if opt.gnn:
-        estimator = GNNPoseNet(num_points = num_points, num_obj = num_objects)
+    if opt.posecnn:
+        estimator = PoseCNN_Net()
         estimator.to(device)
         if not(os.path.exists(opt.model)):
             print('File not found: {0}'.format(opt.model))
@@ -78,22 +79,32 @@ def main():
         estimator.load_state_dict(torch.load(opt.model, map_location=torch.device(device)))
         estimator.eval()
         opt.refine = False
-    else:
-        estimator = PoseNet(num_points = num_points, num_obj = num_objects)
-        estimator.to(device)
-        if not(os.path.exists(opt.model)):
-            print('File not found: {0}'.format(opt.model))
-            exit(0)
-        estimator.load_state_dict(torch.load(opt.model, map_location=torch.device(device)))
-        estimator.eval()
-        if os.path.exists(opt.refine_model):
-            opt.refine = True
-            refiner = PoseRefineNet(num_points = num_points, num_obj = num_objects)
-            refiner.to(device)
-            refiner.load_state_dict(torch.load(opt.refine_model))
-            refiner.eval()
-        else:
+    else: 
+        if opt.gnn:
+            estimator = GNNPoseNet(num_points = num_points, num_obj = num_objects)
+            estimator.to(device)
+            if not(os.path.exists(opt.model)):
+                print('File not found: {0}'.format(opt.model))
+                exit(0)
+            estimator.load_state_dict(torch.load(opt.model, map_location=torch.device(device)))
+            estimator.eval()
             opt.refine = False
+        else:
+            estimator = PoseNet(num_points = num_points, num_obj = num_objects)
+            estimator.to(device)
+            if not(os.path.exists(opt.model)):
+                print('File not found: {0}'.format(opt.model))
+                exit(0)
+            estimator.load_state_dict(torch.load(opt.model, map_location=torch.device(device)))
+            estimator.eval()
+            if os.path.exists(opt.refine_model):
+                opt.refine = True
+                refiner = PoseRefineNet(num_points = num_points, num_obj = num_objects)
+                refiner.to(device)
+                refiner.load_state_dict(torch.load(opt.refine_model))
+                refiner.eval()
+            else:
+                opt.refine = False
 
     testdataset = PoseDataset_linemod(opt.dataset_root, 'eval', num_points=opt.num_points, add_noise=False, noise_trans=0.0, refine=opt.refine_start, device=device)
     testdataloader = torch.utils.data.DataLoader(
@@ -167,21 +178,28 @@ def main():
         #--------------------------------------------------------
         # POSE INFERENCE: Estimate the initial pose using PoseNet
         #--------------------------------------------------------
-        if opt.gnn:
-            pred_r, pred_t, pred_c, emb = estimator(img, points, choose, graph_data, idx, opt.feat)
+        if opt.posecnn:
+            pred_r, pred_t, emb = estimator(img, choose)
         else:
-            pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
-        pred_r = pred_r / torch.norm(pred_r, dim=2).view(batch_size, num_points, 1)
-        pred_c = pred_c.view(batch_size, num_points)
+            if opt.gnn:
+                pred_r, pred_t, pred_c, emb = estimator(img, points, choose, graph_data, idx, opt.feat)
+            else:
+                pred_r, pred_t, pred_c, emb = estimator(img, points, choose, idx)
+            pred_r = pred_r / torch.norm(pred_r, dim=2).view(batch_size, num_points, 1)
+            pred_c = pred_c.view(batch_size, num_points)
         
         # Process each item in the batch
         for b in range(batch_size):
-            how_max, which_max = torch.max(pred_c[b], 0)
-            pred_t_b = pred_t.view(batch_size * num_points, 1, 3)
-            which_idx = b * num_points + which_max
-            
-            my_r = pred_r[b][which_max].view(-1).cpu().data.numpy()
-            my_t = (points[b][which_max] + pred_t_b[which_idx].view(3)).cpu().data.numpy()
+            if opt.posecnn:
+                my_r = pred_r[b].view(-1).cpu().data.numpy()
+                my_t = pred_t[b].view(-1).cpu().data.numpy()
+            else:
+                how_max, which_max = torch.max(pred_c[b], 0)
+                pred_t_b = pred_t.view(batch_size * num_points, 1, 3)
+                which_idx = b * num_points + which_max
+                
+                my_r = pred_r[b][which_max].view(-1).cpu().data.numpy()
+                my_t = (points[b][which_max] + pred_t_b[which_idx].view(3)).cpu().data.numpy()
             my_pred = np.append(my_r, my_t)
 
             #--------------------------------------------------------
