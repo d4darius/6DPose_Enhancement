@@ -61,7 +61,7 @@ parser.add_argument('--resume_posenet', type=str, default = '',  help='resume Po
 parser.add_argument('--resume_refinenet', type=str, default = '',  help='resume PoseRefineNet model')
 parser.add_argument('--start_epoch', type=int, default = 1, help='which epoch to start')
 parser.add_argument('--gnn', action='store_true', default=False, help='start training on the geometric model')
-parser.add_argument('--feat', type=str, default = 'geom',  help='selector for the feature to be used in GIN')
+parser.add_argument('--feat', type=str, default = 'color',  help='selector for the feature to be used in GIN')
 opt = parser.parse_args()
 
 # Initialize W&B
