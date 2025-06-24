@@ -297,6 +297,24 @@ class GNNPoseNet(nn.Module):
         
         return out_rx, out_tx, out_cx, emb.detach()
 
+class PosePredMLP(nn.Module):
+    def __init__(self, input_dim=6, num_points=500):
+        super(PosePredMLP, self).__init__()
+        self.flattened_dim = input_dim * num_points  # 6 × 500 = 3000
+
+        self.fc1 = nn.Linear(self.flattened_dim, 1024)
+        self.fc2 = nn.Linear(1024, 512)
+        self.fc3 = nn.Linear(512, 128)
+        self.fc4 = nn.Linear(128, 7)  # output: [quat (4) + trans (3)]
+    
+    def forward(self, x):
+        x = x.view(x.size(0), -1)
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        x = torch.relu(self.fc3(x))
+        x = self.fc4(x)
+        return x
+
 
 class PoseRefineNetFeat(nn.Module):
     def __init__(self, num_points):
