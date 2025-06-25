@@ -1,3 +1,4 @@
+import _init_paths
 import argparse
 import os
 import numpy as np
