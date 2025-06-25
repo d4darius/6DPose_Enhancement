@@ -30,7 +30,7 @@ psp_models = {
 class BackboneResnet(nn.Module):
     def __init__(self):
         super().__init__()
-        resnet = resnet18(pretrained=True)
+        resnet = resnet34(pretrained=True)
         self.backbone = nn.Sequential(
             resnet.conv1,
             resnet.bn1,
@@ -38,7 +38,8 @@ class BackboneResnet(nn.Module):
             resnet.maxpool,
             resnet.layer1,
             resnet.layer2,
-            resnet.layer3
+            resnet.layer3,
+            resnet.layer4
         )
 
     def forward(self, x):
@@ -57,28 +58,28 @@ class ModifiedResnet(nn.Module):
         return x
 
 class PoseCNN_Net(nn.Module):
-    def __init__(self, feature_dim=256):
+    def __init__(self, feature_dim=512):
         super(PoseCNN_Net, self).__init__()
 
         # REGRESSION 2D TRANSLATION
         self.offset_head = nn.Sequential(
-            nn.Conv1d(feature_dim, 128, 1),
+            nn.Conv1d(feature_dim, 256, 1),
             nn.ReLU(),
-            nn.Conv1d(128, 2, 1)  # Output: [dx, dy]
+            nn.Conv1d(256, 2, 1)  # Output: [dx, dy]
         )
 
         # DEPTH REGRESSION
         self.depth_head = nn.Sequential(
-            nn.Conv1d(feature_dim, 128, 1),
+            nn.Conv1d(feature_dim, 256, 1),
             nn.ReLU(),
-            nn.Conv1d(128, 1, 1)
+            nn.Conv1d(256, 1, 1)
         )
 
         # REGRESSION QUATERNION
         self.rotation_head = nn.Sequential(
-            nn.Linear(feature_dim, 128),
+            nn.Linear(feature_dim, 256),
             nn.ReLU(),
-            nn.Linear(128, 4)
+            nn.Linear(256, 4)
         )
 
         self.cnn = BackboneResnet()
