@@ -1,39 +1,5 @@
 from torch.nn.modules.loss import _Loss
-import torch.nn.functional as F
 import torch
-
-def posecnn_simple_loss(pred_quat, pred_t, model_points, target):
-
-    B = pred_quat.size(0)
-
-    # Normalize quaternions
-    pred_quat = F.normalize(pred_quat, dim=1)
-
-    # Quaternion to rotation matrix (batch-wise)
-    q = pred_quat
-    R = torch.stack([
-        1 - 2*(q[:,2]**2 + q[:,3]**2),
-        2*(q[:,1]*q[:,2] - q[:,0]*q[:,3]),
-        2*(q[:,0]*q[:,2] + q[:,1]*q[:,3]),
-        2*(q[:,1]*q[:,2] + q[:,0]*q[:,3]),
-        1 - 2*(q[:,1]**2 + q[:,3]**2),
-        2*(q[:,2]*q[:,3] - q[:,0]*q[:,1]),
-        2*(q[:,1]*q[:,3] - q[:,0]*q[:,2]),
-        2*(q[:,0]*q[:,1] + q[:,2]*q[:,3]),
-        1 - 2*(q[:,1]**2 + q[:,2]**2)
-    ], dim=1).reshape(B, 3, 3)
-
-    # Transform model points
-    model_transformed = torch.bmm(model_points, R.transpose(1, 2)) + pred_t.unsqueeze(1)
-
-    # Compute L2 distance per point
-    pointwise_dist = torch.norm(model_transformed - target, dim=2)  # [B, num_points]
-    dis = pointwise_dist.mean(dim=1).mean()
-
-    # Final loss as MSE
-    loss = F.mse_loss(model_transformed, target)
-
-    return loss, dis
 
 
 def loss_calculation(pred_r, pred_t, pred_c, target, model_points, idx, points, w, refine, num_point_mesh, sym_list):
@@ -162,11 +128,3 @@ class Loss(_Loss):
     def forward(self, pred_r, pred_t, pred_c, target, model_points, idx, points, w, refine):
 
         return loss_calculation(pred_r, pred_t, pred_c, target, model_points, idx, points, w, refine, self.num_pt_mesh, self.sym_list)
-
-class PoseCNNLoss(_Loss):
-
-    def __init__(self):
-        super(PoseCNNLoss, self).__init__(True)
-
-    def forward(self, pred_quat, pred_t, model_points, target):
-        return posecnn_simple_loss(pred_quat, pred_t, model_points, target)
