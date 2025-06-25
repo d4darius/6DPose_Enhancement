@@ -32,7 +32,7 @@ def to_graph_data(cloud, k=20):
     return data
 
 class PoseDataset(Dataset):
-    def __init__(self, dataset_root, split='train', split_ratio=0.7, seed=42, num_points=500, add_noise=False, noise_trans=0.03, refine=False, device='cpu', sampling='random', use_mask=False):
+    def __init__(self, dataset_root, split='train', split_ratio=0.7, seed=42, num_points=500, add_noise=False, noise_trans=0.03, device='cpu', sampling='random', use_mask=False):
 
         self.dataset_root = dataset_root
         self.split = split
@@ -40,7 +40,6 @@ class PoseDataset(Dataset):
         self.num_points = num_points
         self.add_noise = add_noise
         self.noise_trans = noise_trans
-        self.refine = refine
         self.device = device
         self.split_ratio = split_ratio
         self.sampling = sampling
@@ -59,7 +58,6 @@ class PoseDataset(Dataset):
         self.cam_fy = 573.57043
         self.img_width = 480
         self.img_length = 640
-        self.num_pt_mesh_large = 500
         self.num_pt_mesh_small = 500
         self.symmetry_obj_idx = [10, 11]
 
@@ -630,10 +628,7 @@ class PoseDataset(Dataset):
             return []
     
     def get_num_points_mesh(self):
-        if self.refine:
-            return self.num_pt_mesh_large
-        else:
-            return self.num_pt_mesh_small
+        return self.num_pt_mesh_small
     
     @staticmethod
     def center_pad_collate(batch):

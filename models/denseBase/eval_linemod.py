@@ -1,24 +1,14 @@
-import _init_paths
 import argparse
 import os
 import numpy as np
 import yaml
-import copy
 import torch
 import torch.backends.cudnn as cudnn
-import torch.optim as optim
 import torch.utils.data
-import torchvision.datasets as dset
-import torchvision.transforms as transforms
-import torchvision.utils as vutils
-from torch.autograd import Variable
 from dataload.dataloader import PoseDataset as PoseDataset_linemod
-from lib.network import PoseNet, PoseRefineNet, GNNPoseNet
+from lib.network import PoseNet, GNNPoseNet
 from lib.loss import Loss
-from lib.loss_refiner import Loss_refine
-from lib.transformations import euler_matrix, quaternion_matrix, quaternion_from_matrix
-import wandb
-from torch_geometric.data import Batch
+from lib.transformations import quaternion_matrix
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -39,8 +29,6 @@ else:
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset_root', type=str, default = '', help='dataset root dir')
 parser.add_argument('--model', type=str, default = '',  help='resume PoseNet model')
-parser.add_argument('--refine_model', type=str, default = '',  help='resume PoseRefineNet model')
-parser.add_argument('--refine_start', type=bool, default = False, help='whether to start with refinement')
 parser.add_argument('--num_points', type=int, default = 500, help='number of points to sample')
 parser.add_argument('--gnn', action='store_true', default=False, help='start training on the geometric model')
 parser.add_argument('--batch_size', type=int, default=1, help='batch size for evaluation')
@@ -53,7 +41,6 @@ def main():
     num_objects = 13
     objlist = [1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15]
     num_points = 500
-    iteration = 4
     
     # Force CPU if requested
     use_cuda = torch.cuda.is_available() and not opt.no_cuda
@@ -67,7 +54,7 @@ def main():
     output_result_dir = 'experiments/eval_result/linemod'
 
     #--------------------------------------------------------
-    # MODEL INITIALIZATION: Setup the estimator and refiner models
+    # MODEL INITIALIZATION: Setup the estimator
     #--------------------------------------------------------
     if opt.gnn:
         estimator = GNNPoseNet(num_points = num_points, num_obj = num_objects)
@@ -77,7 +64,6 @@ def main():
             exit(0)
         estimator.load_state_dict(torch.load(opt.model, map_location=torch.device(device)))
         estimator.eval()
-        opt.refine = False
     else:
         estimator = PoseNet(num_points = num_points, num_obj = num_objects)
         estimator.to(device)
@@ -86,16 +72,8 @@ def main():
             exit(0)
         estimator.load_state_dict(torch.load(opt.model, map_location=torch.device(device)))
         estimator.eval()
-        if os.path.exists(opt.refine_model):
-            opt.refine = True
-            refiner = PoseRefineNet(num_points = num_points, num_obj = num_objects)
-            refiner.to(device)
-            refiner.load_state_dict(torch.load(opt.refine_model))
-            refiner.eval()
-        else:
-            opt.refine = False
 
-    testdataset = PoseDataset_linemod(opt.dataset_root, 'eval', num_points=opt.num_points, add_noise=False, noise_trans=0.0, refine=opt.refine_start, device=device)
+    testdataset = PoseDataset_linemod(opt.dataset_root, 'eval', num_points=opt.num_points, add_noise=False, noise_trans=0.0, device=device)
     testdataloader = torch.utils.data.DataLoader(
         testdataset, 
         batch_size=opt.batch_size,
@@ -113,8 +91,6 @@ def main():
     sym_list = testdataset.get_sym_list()
     num_points_mesh = testdataset.get_num_points_mesh()
     criterion = Loss(num_points_mesh, sym_list)
-    if opt.refine:
-        criterion_refine = Loss_refine(num_points_mesh, sym_list)
 
     diameter = []
     if not(os.path.exists(dataset_config_dir)):
@@ -183,37 +159,7 @@ def main():
             my_r = pred_r[b][which_max].view(-1).cpu().data.numpy()
             my_t = (points[b][which_max] + pred_t_b[which_idx].view(3)).cpu().data.numpy()
             my_pred = np.append(my_r, my_t)
-
-            #--------------------------------------------------------
-            # REFINEMENT LOOP: Refine the pose using PoseRefineNet
-            #--------------------------------------------------------
-            if opt.refine:
-                for ite in range(0, iteration):
-                    T = Variable(torch.from_numpy(my_t.astype(np.float32))).to(device).view(1, 3).repeat(num_points, 1).contiguous().view(1, num_points, 3)
-                    my_mat = quaternion_matrix(my_r)
-                    R = Variable(torch.from_numpy(my_mat[:3, :3].astype(np.float32))).to(device).view(1, 3, 3)
-                    my_mat[0:3, 3] = my_t
-                    
-                    new_points = torch.bmm((points[b].view(1, num_points, 3) - T), R).contiguous()
-                    pred_r, pred_t = refiner(new_points, emb[b:b+1], idx[b:b+1])
-                    pred_r = pred_r.view(1, 1, -1)
-                    pred_r = pred_r / (torch.norm(pred_r, dim=2).view(1, 1, 1))
-                    my_r_2 = pred_r.view(-1).cpu().data.numpy()
-                    my_t_2 = pred_t.view(-1).cpu().data.numpy()
-                    my_mat_2 = quaternion_matrix(my_r_2)
-                    my_mat_2[0:3, 3] = my_t_2
-
-                    my_mat_final = np.dot(my_mat, my_mat_2)
-                    my_r_final = copy.deepcopy(my_mat_final)
-                    my_r_final[0:3, 3] = 0
-                    my_r_final = quaternion_from_matrix(my_r_final, True)
-                    my_t_final = np.array([my_mat_final[0][3], my_mat_final[1][3], my_mat_final[2][3]])
-
-                    my_pred = np.append(my_r_final, my_t_final)
-                    my_r = my_r_final
-                    my_t = my_t_final
-
-            # Here 'my_pred' is the final pose estimation result after refinement ('my_r': quaternion, 'my_t': translation)
+            # Here 'my_pred' is the final pose estimation result ('my_r': quaternion, 'my_t': translation)
 
             #--------------------------------------------------------
             # RESULTS: Evaluate the pose estimation result for each object

@@ -1,15 +1,11 @@
-import _init_paths
 import argparse
 import os
 import numpy as np
-import yaml
-import copy
 import torch
 import torch.backends.cudnn as cudnn
-from torch.autograd import Variable
 from dataload.dataloader import PoseDataset as PoseDataset_linemod
-from lib.network import PoseNet, PoseRefineNet
-from lib.transformations import euler_matrix, quaternion_matrix, quaternion_from_matrix
+from lib.network import PoseNet
+from lib.transformations import quaternion_matrix
 import matplotlib.pyplot as plt
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -27,7 +23,6 @@ else:
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset_root', type=str, required=True, help='dataset root dir')
 parser.add_argument('--model', type=str, required=True, help='PoseNet model path')
-parser.add_argument('--refine_model', type=str, default='', help='PoseRefineNet model path')
 parser.add_argument('--output_dir', type=str, default='plots/eval_linemod', help='Output directory for images')
 parser.add_argument('--num_points', type=int, default=500, help='number of points to sample')
 parser.add_argument('--img_size', type=int, default=480, help='image size for plotting')
@@ -38,7 +33,6 @@ def main():
     num_objects = 13
     objlist = [1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15]
     num_points = opt.num_points
-    iteration = 4
     bs = 1
 
     if not os.path.exists(opt.output_dir):
@@ -49,17 +43,9 @@ def main():
     estimator.to(device)
     estimator.load_state_dict(torch.load(opt.model, map_location=device))
     estimator.eval()
-    if opt.refine_model and os.path.exists(opt.refine_model):
-        refine = True
-        refiner = PoseRefineNet(num_points=num_points, num_obj=num_objects)
-        refiner.to(device)
-        refiner.load_state_dict(torch.load(opt.refine_model, map_location=device))
-        refiner.eval()
-    else:
-        refine = False
 
     # Load dataset
-    testdataset = PoseDataset_linemod(opt.dataset_root, 'eval', num_points=num_points, add_noise=False, noise_trans=0.0, refine=False, device=device)
+    testdataset = PoseDataset_linemod(opt.dataset_root, 'eval', num_points=num_points, add_noise=False, noise_trans=0.0, device=device)
 
     # Select one image per object id
     selected_indices = {}
@@ -100,29 +86,6 @@ def main():
 
         my_r = pred_r[0][which_max[0]].view(-1).cpu().data.numpy()
         my_t = (points.view(bs * num_points, 1, 3) + pred_t)[which_max[0]].view(-1).cpu().data.numpy()
-
-        # Refinement (optional)
-        if refine:
-            for ite in range(0, iteration):
-                T = Variable(torch.from_numpy(my_t.astype(np.float32))).to(device).view(1, 3).repeat(num_points, 1).contiguous().view(1, num_points, 3)
-                my_mat = quaternion_matrix(my_r)
-                R = Variable(torch.from_numpy(my_mat[:3, :3].astype(np.float32))).to(device).view(1, 3, 3)
-                my_mat[0:3, 3] = my_t
-                new_points = torch.bmm((points - T), R).contiguous()
-                pred_r, pred_t = refiner(new_points, emb, obj_idx)
-                pred_r = pred_r.view(1, 1, -1)
-                pred_r = pred_r / (torch.norm(pred_r, dim=2).view(1, 1, 1))
-                my_r_2 = pred_r.view(-1).cpu().data.numpy()
-                my_t_2 = pred_t.view(-1).cpu().data.numpy()
-                my_mat_2 = quaternion_matrix(my_r_2)
-                my_mat_2[0:3, 3] = my_t_2
-                my_mat_final = np.dot(my_mat, my_mat_2)
-                my_r_final = copy.deepcopy(my_mat_final)
-                my_r_final[0:3, 3] = 0
-                my_r_final = quaternion_from_matrix(my_r_final, True)
-                my_t_final = np.array([my_mat_final[0][3], my_mat_final[1][3], my_mat_final[2][3]])
-                my_r = my_r_final
-                my_t = my_t_final
 
         # Transform model points with predicted pose
         model_points_np = model_points[0].cpu().detach().numpy()

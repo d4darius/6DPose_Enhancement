@@ -107,7 +107,6 @@ python3.10 ./models/denseBase/train.py --dataset linemod --dataset_root path/to/
 - `--w_rate`: Weight decay rate (default: 0.3).
 - `--decay_margin`: Margin to trigger learning rate and weight decay (default: 0.016).
 - `--noise_trans`: Range of random translation noise added to training data (default: 0.03).
-- `--iteration`: Number of refinement iterations (default: 2, but not used unless refinement is enabled).
 - `--nepoch`: Number of training epochs (default: 500).
 - `--resume_posenet`: Path to a checkpoint to resume PoseNet training from.
 - `--start_epoch`: Epoch number to start training from (default: 1).
