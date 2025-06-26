@@ -2,6 +2,10 @@
 # DenseFusion 6D Object Pose Estimation by Iterative Dense Fusion
 # Licensed under The MIT License [see LICENSE for details]
 # Written by Chen
+# Adapted and modified by Fassio Simone, Gosmar Dario, Murariu Sara, Roberto Marco,  2025
+# Modifications: added GNN network, changed dataloader,
+#   general improvements on batch support, migration to python3.10
+# This file and modifications remain under the MIT License.
 # --------------------------------------------------------
 
 import _init_paths
@@ -56,7 +60,7 @@ opt = parser.parse_args()
 
 # Initialize W&B
 wandb.init(
-    project="6D-Pose-Estimation",  # Replace with your project name
+    project="6D-Pose-Estimation",
     config={
         "dataset": opt.dataset,
         "batch_size": opt.batch_size,

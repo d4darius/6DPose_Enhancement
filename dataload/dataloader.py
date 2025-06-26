@@ -49,7 +49,7 @@ class PoseDataset(Dataset):
         self.objlist = [1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15]
         self.obj_id_map = {real_id: i for i, real_id in enumerate(self.objlist)}
         self.pt = {}
-        self.gt_data_cache = {} # New: Cache for gt.yml data
+        self.gt_data_cache = {}
 
         # Camera intrinsics
         self.cam_cx = 325.26110
@@ -99,7 +99,7 @@ class PoseDataset(Dataset):
 
     def preload_gt_data(self):
         print("Preloading ground truth YAML data...")
-        folder_ids = sorted(list(set(sample[0] for sample in self.samples))) # Get unique folder_ids
+        folder_ids = sorted(list(set(sample[0] for sample in self.samples)))
         for folder_id in folder_ids:
             gt_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", "gt.yml")
             if os.path.exists(gt_path):
@@ -149,9 +149,7 @@ class PoseDataset(Dataset):
         mask = Image.open(mask_path).convert("RGBA")
         return self.transform(mask)
     def load_pose(self, folder_id, sample_id_in_yaml):
-        # Load a 6D pose from cached data
         if folder_id not in self.gt_data_cache:
-            # This should ideally not happen if preload_gt_data worked
             raise ValueError(f"gt.yml data for folder {folder_id} not found in cache.")
         
         pose_data_for_folder = self.gt_data_cache[folder_id]
@@ -160,7 +158,7 @@ class PoseDataset(Dataset):
              raise ValueError(f"Sample ID {sample_id_in_yaml} not found in gt.yml for folder {folder_id}")
 
         sample_data_list = pose_data_for_folder[sample_id_in_yaml]
-        if not sample_data_list: # Check if the list is empty
+        if not sample_data_list:
             raise ValueError(f"No pose data for sample ID {sample_id_in_yaml} in folder {folder_id}")
         
         for data in sample_data_list:
@@ -193,16 +191,13 @@ class PoseDataset(Dataset):
         return bbx[0], bbx[1], bbx[2], bbx[3]
 
             
-    #Define here some usefull functions to access the data
     def __len__(self):
-        #Return the total number of samples in the selected split.
         return len(self.samples)
 
     def __getitem__(self, idx):
-        folder_id, sample_id = self.samples[idx] # sample_id here is the file name like 0000, 0001
+        folder_id, sample_id = self.samples[idx]
         mapped_id = self.obj_id_map[folder_id]
 
-        # LOADING PATHS (only for non-YAML data now)
         img_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"rgb/{sample_id:04d}.png")
         depth_path = os.path.join(self.dataset_root, 'data', f"{folder_id:02d}", f"depth/{sample_id:04d}.png")
         
@@ -219,8 +214,6 @@ class PoseDataset(Dataset):
         img = self.load_image(img_path)
         depth = self.load_depth(depth_path)
         
-        # Use sample_id as the key for the YAML data, which seems to be 0-indexed in the YAML file
-        # The sample_id from self.samples is the file name (e.g., 0, 1, 2, ... for 0000.png, 0001.png)
         yaml_key_sample_id = sample_id 
 
         try:
@@ -279,7 +272,7 @@ class PoseDataset(Dataset):
                     }
                 else:
                     label = np.array(Image.open(mask_path))
-                    mask_label = ma.getmaskarray(ma.masked_equal(label, np.array(255))) # Assuming 255 is object
+                    mask_label = ma.getmaskarray(ma.masked_equal(label, np.array(255)))
             else:
                 # If no mask is used, create a dummy mask
                 mask_label = np.ones((self.img_width, self.img_length), dtype=bool)
@@ -302,10 +295,10 @@ class PoseDataset(Dataset):
                 # Load the mask image
                 label = np.array(Image.open(mask_path))
                 # Ensure mask_label is boolean and 2D
-                if label.ndim == 3 and label.shape[2] >= 3: # Check if it's an RGB-like mask
+                if label.ndim == 3 and label.shape[2] >= 3:
                      mask_label = np.all(label == [255,255,255], axis=2)
-                elif label.ndim == 2: # Grayscale mask
-                     mask_label = (label == 255) # Assuming 255 is the object
+                elif label.ndim == 2:
+                     mask_label = (label == 255)
                 else:
                      return {"error": f"Unexpected mask format for {mask_path}"}
                 mask_label = ma.getmaskarray(ma.masked_equal(mask_label, True))
@@ -467,9 +460,6 @@ class PoseDataset(Dataset):
         return rmin, rmax, cmin, cmax
     
     def sample_points(self, depth_crop, rmin, rmax, cmin, cmax, mask_full):
-        # depth_crop is the depth image already cropped to the bounding box [rmin:rmax, cmin:cmax]
-        # mask_full is the boolean mask for the entire image (e.g., mask_label * mask_depth)
-
         # 1. Get the mask for the cropped region
         mask_cropped = mask_full[rmin:rmax, cmin:cmax]
         
@@ -543,14 +533,12 @@ class PoseDataset(Dataset):
     def curvature_point_sampling(self, cloud, num_keypoints):
         #Select 3D keypoints based on curvature and spatial distribution.
         
-        
         # Estimate normals
         point_cloud = o3d.geometry.PointCloud()
         point_cloud.points = o3d.utility.Vector3dVector(cloud)
         point_cloud.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=30))
 
-        
-            # Compute curvature using eigenvalues of the covariance matrix
+        # Compute curvature using eigenvalues of the covariance matrix
         curvatures = []
         kdtree = o3d.geometry.KDTreeFlann(point_cloud)
         points = np.asarray(point_cloud.points)
@@ -728,6 +716,5 @@ if __name__ == '__main__':
     train_dataset.plotitem(idx)
 
     train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True)
-
 
     print(f"Training samples: {len(train_dataset)}")

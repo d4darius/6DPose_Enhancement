@@ -1,7 +1,10 @@
+# --------------------------------------------------------
+# 6D Object Pose Estimation - YOLO finetune
+# Licensed under The MIT License [see LICENSE for details]
+# Written by Fassio Simone
+# --------------------------------------------------------
 import os
 import yaml
-import numpy as np
-from tqdm import tqdm
 import torch
 import ultralytics
 from ultralytics import YOLO

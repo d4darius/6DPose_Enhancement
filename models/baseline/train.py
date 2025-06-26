@@ -1,3 +1,8 @@
+# --------------------------------------------------------
+# 6D Object Pose Estimation - baseline
+# Licensed under The MIT License [see LICENSE for details]
+# Written by Roberto Marco
+# --------------------------------------------------------
 import numpy as np
 import os
 import sys
