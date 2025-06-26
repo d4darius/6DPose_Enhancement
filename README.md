@@ -55,7 +55,7 @@ To activate the environment later:
 
 The correct dataset loading can be verified by running the dataset_test.py file found in the dataload folder using the command
 
-`python3.10 dataload/dataset_tests.py`
+`python3.10 dataload/dataloader.py`
 
 The output will be stored in the plot/testing directory
 
@@ -111,6 +111,7 @@ python3.10 ./models/denseBase/train.py --dataset linemod --dataset_root path/to/
 - `--resume_posenet`: Path to a checkpoint to resume PoseNet training from.
 - `--start_epoch`: Epoch number to start training from (default: 1).
 - `--gnn`: Add this flag to use the GNN-based model instead of the standard DenseFusion.
+- `--feat`: Allows you to specify which feature will be used in the nodes of the graph (default: "color").
 
 **Example:**
 
