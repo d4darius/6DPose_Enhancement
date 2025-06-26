@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
 from dataload.dataloader import PoseDataset as PoseDataset_linemod
-from lib.network import PoseNet
+from lib.network import PoseNet, GNNPoseNet
 from lib.transformations import quaternion_matrix
 import matplotlib.pyplot as plt
 
@@ -40,7 +40,10 @@ def main():
         os.makedirs(opt.output_dir)
 
     # Load models
-    estimator = PoseNet(num_points=num_points, num_obj=num_objects)
+    if opt.gnn:
+        estimator = GNNPoseNet(num_points=num_points, num_obj=num_objects)
+    else:
+        estimator = PoseNet(num_points=num_points, num_obj=num_objects)
     estimator.to(device)
     estimator.load_state_dict(torch.load(opt.model, map_location=device))
     estimator.eval()
@@ -71,15 +74,18 @@ def main():
         choose = data['choose'].unsqueeze(0).to(device)
         img = data['image'].unsqueeze(0).to(device)
         if opt.gnn:
-            graph_data = data['graph'].unsqueeze(0).to(device)
-        model_points = data['model_points'].unsqueeze(0).to(device)
-        obj_idx = torch.tensor([obj_id-1], dtype=torch.long).to(device)  # assuming obj_id starts from 1
+            graph_data = data['graph'].to(device)
+        model_points = data['model_points'].to(device)
+        obj_idx = data['obj_id'].to(device)
+        if torch.is_tensor(obj_idx) and obj_idx.dim() == 0:
+            obj_idx = obj_idx.item()
+        obj_idx = torch.tensor([obj_idx], device=device)
 
         # Run PoseNet
         if opt.gnn:
-            pred_r, pred_t, pred_c, emb = estimator(img, points, choose, torch.tensor([obj_id], dtype=torch.long).to(device))
+            pred_r, pred_t, pred_c, emb = estimator(img, points, choose, graph_data, obj_idx, "color")
         else:
-            pred_r, pred_t, pred_c, emb = estimator(img, points, choose, graph_data, torch.tensor([obj_id], dtype=torch.long).to(device))
+            pred_r, pred_t, pred_c, emb = estimator(img, points, choose, obj_idx)
         pred_r = pred_r / torch.norm(pred_r, dim=2).view(1, num_points, 1)
         pred_c = pred_c.view(bs, num_points)
         _, which_max = torch.max(pred_c, 1)
@@ -89,7 +95,7 @@ def main():
         my_t = (points.view(bs * num_points, 1, 3) + pred_t)[which_max[0]].view(-1).cpu().data.numpy()
 
         # Transform model points with predicted pose
-        model_points_np = model_points[0].cpu().detach().numpy()
+        model_points_np = model_points.cpu().detach().numpy()
         my_r_mat = quaternion_matrix(my_r)[:3, :3]
         pred_points = np.dot(model_points_np, my_r_mat.T) + my_t
 
