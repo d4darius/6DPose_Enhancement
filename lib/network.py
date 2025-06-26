@@ -81,25 +81,16 @@ class PoseNet(nn.Module):
         self.num_obj = num_obj
 
     def forward(self, img, x, choose, obj):
-        # print('img', img.size())
-        # print('choose', choose.size())
         out_img = self.cnn(img)
-        # print('out_img', out_img.size())
         
         bs, di, _, _ = out_img.size()
 
         emb = out_img.view(bs, di, -1)
-        # print('emb', emb.size())
         choose = choose.long().to(emb.device)
         choose = choose.unsqueeze(1).repeat(1, di, 1)
-        # print('choose', choose.size())
         emb = torch.gather(emb, 2, choose).contiguous()
-        #print(choose[0, 1, :])
         x = x.transpose(2, 1).contiguous()
-        # print('emb', emb.size())
-        # print('x', x.size())
         ap_x = self.feat(x, emb)
-        # print('ap_x', ap_x.size())
 
         rx = F.relu(self.conv1_r(ap_x))
         tx = F.relu(self.conv1_t(ap_x))
@@ -116,9 +107,6 @@ class PoseNet(nn.Module):
         rx = self.conv4_r(rx).view(bs, self.num_obj, 4, self.num_points)
         tx = self.conv4_t(tx).view(bs, self.num_obj, 3, self.num_points)
         cx = torch.sigmoid(self.conv4_c(cx)).view(bs, self.num_obj, 1, self.num_points)
-        # print('rx', rx.size())
-        # print('tx', tx.size())
-        # print('cx', cx.size())
         out_rx = []
         out_tx = []
         out_cx = []
@@ -153,14 +141,12 @@ class GNNFeat(nn.Module):
         self.g_conv1 = torch.nn.Conv1d(3, 64, 1)
         self.c_conv1 = torch.nn.Conv1d(32, 64, 1)
 
-        #self.gnn_conv1 = GCNConv(128, 256)
         self.mlp1 = nn.Sequential(
             nn.Linear(64, 128),
             nn.ReLU(),
             nn.Linear(128, 128)
         )
         self.gnn_conv1 = GINConv(self.mlp1)
-        #self.gnn_conv2 = GCNConv(256, 512)
         self.mlp2 = nn.Sequential(
             nn.Linear(128, 128),
             nn.ReLU(),

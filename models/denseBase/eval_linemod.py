@@ -84,7 +84,6 @@ def main():
         collate_fn=testdataset.center_pad_collate
     )
     
-    # Use actual batch size from dataloader
     bs = testdataloader.batch_size
     print(f"Evaluating with batch size: {bs}")
     print(f"Using module with feature {opt.feat}")
@@ -108,7 +107,6 @@ def main():
 
     success_count = [0 for i in range(num_objects)]
     num_count = [0 for i in range(num_objects)]
-    # Add tracking for total distances per object
     total_distances = [0.0 for i in range(num_objects)]
     fw = open('{0}/eval_result_logs.txt'.format(output_result_dir), 'w')
 
@@ -138,7 +136,6 @@ def main():
                                                                               model_points.to(device), \
                                                                               idx.to(device)
 
-        # Get the actual batch size from the data
         batch_size = img.size(0)
         
         #--------------------------------------------------------
@@ -151,7 +148,6 @@ def main():
         pred_r = pred_r / torch.norm(pred_r, dim=2).view(batch_size, num_points, 1)
         pred_c = pred_c.view(batch_size, num_points)
         
-        # Process each item in the batch
         for b in range(batch_size):
             how_max, which_max = torch.max(pred_c[b], 0)
             pred_t_b = pred_t.view(batch_size * num_points, 1, 3)
@@ -167,8 +163,7 @@ def main():
             #--------------------------------------------------------
             model_points_b = model_points[b].cpu().detach().numpy()
             my_r_matrix = quaternion_matrix(my_r)[:3, :3]
-            # Ensure my_t is properly shaped for broadcasting (3,)
-            my_t_reshaped = my_t #if my_t.shape == (3,) else my_t.reshape(3)
+            my_t_reshaped = my_t
             pred = np.dot(model_points_b, my_r_matrix.T) + my_t_reshaped
             target_b = target[b].cpu().detach().numpy()
 
@@ -188,7 +183,6 @@ def main():
             else:
                 dis = np.mean(np.linalg.norm(pred - target_b, axis=1))
 
-            # Add the distance to the total for this object
             total_distances[obj_idx] += dis
             
             if dis < diameter[obj_idx]:
